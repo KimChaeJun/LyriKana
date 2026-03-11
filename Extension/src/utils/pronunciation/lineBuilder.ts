@@ -1,5 +1,5 @@
-import { buildPronunciation } from "./converters.ts";
-import { getJapaneseReading } from "./reading.ts";
+import { buildPronunciation } from "./converters";
+import { getJapaneseReading } from "./reading";
 
 export type LyricLine = {
   time: number;

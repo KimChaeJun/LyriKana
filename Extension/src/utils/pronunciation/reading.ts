@@ -1,5 +1,3 @@
-import kuromoji from "kuromoji";
-
 let tokenizerPromise: Promise<any> | null = null;
 
 function katakanaToHiragana(input: string): string {
@@ -11,15 +9,22 @@ function katakanaToHiragana(input: string): string {
 export function getTokenizer() {
   if (!tokenizerPromise) {
     tokenizerPromise = new Promise((resolve, reject) => {
-      kuromoji.builder({
-        dicPath: chrome.runtime.getURL("dict"),
-      }).build((err, tokenizer) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(tokenizer);
-      });
+      if (typeof kuromoji === "undefined") {
+        reject(new Error("kuromoji global is not loaded"));
+        return;
+      }
+
+      kuromoji
+        .builder({
+          dicPath: chrome.runtime.getURL("dict") + "/",
+        })
+        .build((err: any, tokenizer: any) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve(tokenizer);
+        });
     });
   }
 
@@ -30,14 +35,12 @@ export async function getJapaneseReading(text: string): Promise<string> {
   const tokenizer = await getTokenizer();
   const tokens = tokenizer.tokenize(text);
 
-  const reading = tokens
+  return tokens
     .map((token: any) => {
       if (token.reading && token.reading !== "*") {
         return katakanaToHiragana(token.reading);
       }
-      return token.surface_form;
+      return token.surface_form ?? "";
     })
     .join("");
-
-  return reading;
 }

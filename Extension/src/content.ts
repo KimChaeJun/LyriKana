@@ -1,0 +1,240 @@
+import { parseLrcWithPronunciation } from "./utils/lyrics/parseLrcWithPronunciation";
+
+type LyricLine = {
+  time: number;
+  original: string;
+  reading: string;
+  kr: string;
+  jp: string;
+  en: string;
+};
+
+let lastSongKey: string | null = null;
+let currentLyrics: LyricLine[] = [];
+let currentLineIndex = -1;
+
+const INTRO_TEXT = "♪ 전주 ♪";
+const INSTRUMENTAL_TEXT = "♪ 간주 ♪";
+
+function cleanTitle(title: string): string {
+  if (title.includes(" - ")) {
+    title = title.split(" - ")[0];
+  }
+  return title.trim();
+}
+
+function cleanArtist(artist: string): string {
+  if (artist.includes("•")) {
+    artist = artist.split("•")[0];
+  }
+  return artist.trim();
+}
+
+function getSongInfo(): { title: string; artist: string } | null {
+  const titleElement =
+    document.querySelector("ytmusic-player-bar .title") ??
+    document.querySelector("#layout ytmusic-player-bar .title");
+
+  const artistElement =
+    document.querySelector("ytmusic-player-bar .byline") ??
+    document.querySelector("#layout ytmusic-player-bar .byline");
+
+  if (!titleElement || !artistElement) return null;
+
+  const title = cleanTitle(titleElement.textContent?.trim() || "");
+  const artist = cleanArtist(artistElement.textContent?.trim() || "");
+
+  if (!title || !artist) return null;
+
+  return { title, artist };
+}
+
+function createLine(id: string, fontSize: string, opacity = "1", weight = "400"): HTMLDivElement {
+  const el = document.createElement("div");
+  el.id = id;
+  el.style.fontSize = fontSize;
+  el.style.opacity = opacity;
+  el.style.fontWeight = weight;
+  el.style.lineHeight = "1.45";
+  return el;
+}
+
+function createLyricsOverlay(): void {
+  if (document.getElementById("lyrikana-overlay")) return;
+
+  const overlay = document.createElement("div");
+  overlay.id = "lyrikana-overlay";
+
+  overlay.style.position = "fixed";
+  overlay.style.bottom = "120px";
+  overlay.style.left = "50%";
+  overlay.style.transform = "translateX(-50%)";
+  overlay.style.background = "rgba(0,0,0,0.74)";
+  overlay.style.color = "white";
+  overlay.style.padding = "18px 28px";
+  overlay.style.borderRadius = "14px";
+  overlay.style.zIndex = "99999";
+  overlay.style.maxWidth = "82vw";
+  overlay.style.minWidth = "360px";
+  overlay.style.textAlign = "center";
+  overlay.style.whiteSpace = "pre-wrap";
+  overlay.style.backdropFilter = "blur(6px)";
+  overlay.style.boxShadow = "0 8px 24px rgba(0,0,0,0.25)";
+
+  const originalLine = createLine("lyrikana-original-line", "24px", "1", "700");
+  const readingLine = createLine("lyrikana-reading-line", "18px", "0.92", "500");
+  const krLine = createLine("lyrikana-kr-line", "17px", "0.85", "400");
+  const nextLine = createLine("lyrikana-next-line", "16px", "0.58", "400");
+
+  originalLine.style.marginBottom = "6px";
+  readingLine.style.marginBottom = "4px";
+  krLine.style.marginBottom = "10px";
+
+  originalLine.innerText = "LyriKana loading...";
+  readingLine.innerText = "";
+  krLine.innerText = "";
+  nextLine.innerText = "";
+
+  overlay.appendChild(originalLine);
+  overlay.appendChild(readingLine);
+  overlay.appendChild(krLine);
+  overlay.appendChild(nextLine);
+  document.body.appendChild(overlay);
+}
+
+function updateLyricsDisplay(
+  current?: Partial<LyricLine> | null,
+  next?: Partial<LyricLine> | null,
+  overrideOriginal = ""
+): void {
+  const originalLine = document.getElementById("lyrikana-original-line");
+  const readingLine = document.getElementById("lyrikana-reading-line");
+  const krLine = document.getElementById("lyrikana-kr-line");
+  const nextLine = document.getElementById("lyrikana-next-line");
+
+  if (!originalLine || !readingLine || !krLine || !nextLine) return;
+
+  originalLine.innerText = overrideOriginal || current?.original || "";
+  readingLine.innerText = overrideOriginal ? "" : current?.reading || "";
+  krLine.innerText = overrideOriginal ? "" : current?.kr || "";
+  nextLine.innerText = next?.original ? `다음: ${next.original}` : "";
+}
+
+function resetLyrics(message: string): void {
+  currentLyrics = [];
+  currentLineIndex = -1;
+  updateLyricsDisplay(null, null, message);
+}
+
+function updateLyricsByTime(): void {
+  const player = document.querySelector("video") as HTMLVideoElement | null;
+  if (!player || currentLyrics.length === 0) return;
+
+  const currentTime = player.currentTime;
+  let newIndex = -1;
+
+  for (let i = 0; i < currentLyrics.length; i++) {
+    if (currentTime >= currentLyrics[i].time) {
+      newIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  if (newIndex === -1) {
+    if (currentLineIndex !== -3) {
+      currentLineIndex = -3;
+      updateLyricsDisplay(null, currentLyrics[0], INTRO_TEXT);
+    }
+    return;
+  }
+
+  const currentLine = currentLyrics[newIndex];
+  const nextLine = currentLyrics[newIndex + 1];
+
+  if (nextLine) {
+    const gap = nextLine.time - currentLine.time;
+    if (gap >= 6 && currentTime >= currentLine.time + 3 && currentTime < nextLine.time) {
+      if (currentLineIndex !== -2) {
+        currentLineIndex = -2;
+        updateLyricsDisplay(null, nextLine, INSTRUMENTAL_TEXT);
+      }
+      return;
+    }
+  }
+
+  if (newIndex !== currentLineIndex) {
+    currentLineIndex = newIndex;
+    updateLyricsDisplay(currentLine, nextLine);
+  }
+}
+
+async function fetchLyrics(title: string, artist: string): Promise<void> {
+  try {
+    const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!Array.isArray(data) || data.length === 0) {
+      resetLyrics("Lyrics not found");
+      return;
+    }
+
+    const song = data.find((item) => item?.syncedLyrics) ?? data[0];
+
+    if (!song?.syncedLyrics) {
+      resetLyrics("Synced lyrics not available");
+      return;
+    }
+
+    currentLyrics = (await parseLrcWithPronunciation(song.syncedLyrics)) as LyricLine[];
+    currentLineIndex = -1;
+
+    if (currentLyrics.length === 0) {
+      resetLyrics("No lyric lines");
+      return;
+    }
+
+    updateLyricsDisplay(currentLyrics[0], currentLyrics[1] ?? null);
+  } catch (error) {
+    console.error("LyriKana lyrics error:", error);
+    resetLyrics("Lyrics error");
+  }
+}
+
+async function handleSongChange(): Promise<void> {
+  const song = getSongInfo();
+  if (!song) return;
+
+  const songKey = `${song.title} - ${song.artist}`;
+  if (songKey === lastSongKey) return;
+
+  lastSongKey = songKey;
+  resetLyrics("Loading lyrics...");
+  await fetchLyrics(song.title, song.artist);
+}
+
+function startObserver(): void {
+  const target = document.querySelector("ytmusic-player-bar");
+  if (!target) {
+    console.log("LyriKana: player not found");
+    return;
+  }
+
+  const observer = new MutationObserver(() => {
+    void handleSongChange();
+  });
+
+  observer.observe(target, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+}
+
+window.addEventListener("load", () => {
+  createLyricsOverlay();
+  startObserver();
+  void handleSongChange();
+  setInterval(updateLyricsByTime, 200);
+});
