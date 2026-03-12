@@ -1,25 +1,47 @@
 import { buildLyricLine } from "../pronunciation/lineBuilder";
 
+function sleep(ms = 0): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function parseLrcWithPronunciation(lrc: string) {
+
   const rawLines = lrc
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const parsed = await Promise.all(
-    rawLines.map(async (line) => {
-      const match = line.match(/\[(\d{2}):(\d{2}(?:\.\d+)?)\]\s*(.*)/);
-      if (!match) return null;
+  console.log("[LyriKana] raw syncedLyrics:", lrc);
 
-      const minutes = parseInt(match[1], 10);
-      const seconds = parseFloat(match[2]);
-      const original = match[3].trim();
+  const parsed = [];
 
-      if (!original) return null;
+  for (let i = 0; i < rawLines.length; i++) {
 
-      return buildLyricLine(minutes * 60 + seconds, original);
-    })
-  );
+    const line = rawLines[i];
 
-  return parsed.filter(Boolean);
+    const match = line.match(/\[(\d{2}):(\d{2}(?:\.\d+)?)\]\s*(.*)/);
+
+    if (!match) continue;
+
+    const minutes = parseInt(match[1], 10);
+    const seconds = parseFloat(match[2]);
+
+    const original = match[3].trim();
+
+    if (!original) continue;
+
+    const lyricLine = await buildLyricLine(
+      minutes * 60 + seconds,
+      original
+    );
+
+    parsed.push(lyricLine);
+
+    // UI freeze 방지
+    if (i % 4 === 3) {
+      await sleep(0);
+    }
+  }
+
+  return parsed;
 }

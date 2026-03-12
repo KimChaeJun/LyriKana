@@ -14,7 +14,18 @@ export async function buildLyricLine(
   time: number,
   original: string
 ): Promise<LyricLine> {
-  const reading = await getJapaneseReading(original);
+
+  let reading = original;
+
+  try {
+    reading = await getJapaneseReading(original);
+  } catch (error) {
+    console.error("[LyriKana] reading fallback used:", {
+      original,
+      error,
+    });
+  }
+
   const pronunciation = buildPronunciation(reading);
 
   return {

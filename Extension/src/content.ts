@@ -49,7 +49,12 @@ function getSongInfo(): { title: string; artist: string } | null {
   return { title, artist };
 }
 
-function createLine(id: string, fontSize: string, opacity = "1", weight = "400"): HTMLDivElement {
+function createLine(
+  id: string,
+  fontSize: string,
+  opacity = "1",
+  weight = "400"
+): HTMLDivElement {
   const el = document.createElement("div");
   el.id = id;
   el.style.fontSize = fontSize;
@@ -80,6 +85,8 @@ function createLyricsOverlay(): void {
   overlay.style.whiteSpace = "pre-wrap";
   overlay.style.backdropFilter = "blur(6px)";
   overlay.style.boxShadow = "0 8px 24px rgba(0,0,0,0.25)";
+  overlay.style.pointerEvents = "none";
+  overlay.style.userSelect = "none";
 
   const originalLine = createLine("lyrikana-original-line", "24px", "1", "700");
   const readingLine = createLine("lyrikana-reading-line", "18px", "0.92", "500");
@@ -100,6 +107,7 @@ function createLyricsOverlay(): void {
   overlay.appendChild(krLine);
   overlay.appendChild(nextLine);
   document.body.appendChild(overlay);
+  console.log("[LyriKana] overlay created");
 }
 
 function updateLyricsDisplay(
@@ -154,7 +162,11 @@ function updateLyricsByTime(): void {
 
   if (nextLine) {
     const gap = nextLine.time - currentLine.time;
-    if (gap >= 6 && currentTime >= currentLine.time + 3 && currentTime < nextLine.time) {
+    if (
+      gap >= 6 &&
+      currentTime >= currentLine.time + 3 &&
+      currentTime < nextLine.time
+    ) {
       if (currentLineIndex !== -2) {
         currentLineIndex = -2;
         updateLyricsDisplay(null, nextLine, INSTRUMENTAL_TEXT);
@@ -164,6 +176,12 @@ function updateLyricsByTime(): void {
   }
 
   if (newIndex !== currentLineIndex) {
+    console.log("[LyriKana] line change:", {
+      newIndex,
+      currentTime,
+      currentLine: currentLyrics[newIndex],
+      nextLine: currentLyrics[newIndex + 1],
+    });
     currentLineIndex = newIndex;
     updateLyricsDisplay(currentLine, nextLine);
   }
@@ -171,9 +189,16 @@ function updateLyricsByTime(): void {
 
 async function fetchLyrics(title: string, artist: string): Promise<void> {
   try {
-    const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}`;
+    const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(
+      title
+    )}&artist_name=${encodeURIComponent(artist)}`;
+
+    console.log("[LyriKana] fetching lyrics:", { title, artist, url });
+
     const res = await fetch(url);
     const data = await res.json();
+
+    console.log("[LyriKana] lyrics api response:", data);
 
     if (!Array.isArray(data) || data.length === 0) {
       resetLyrics("Lyrics not found");
@@ -181,13 +206,22 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
     }
 
     const song = data.find((item) => item?.syncedLyrics) ?? data[0];
+    console.log("[LyriKana] selected song:", song);
 
     if (!song?.syncedLyrics) {
       resetLyrics("Synced lyrics not available");
       return;
     }
 
-    currentLyrics = (await parseLrcWithPronunciation(song.syncedLyrics)) as LyricLine[];
+    updateLyricsDisplay(null, null, "Analyzing pronunciation...");
+
+    currentLyrics = (await parseLrcWithPronunciation(
+      song.syncedLyrics
+    )) as LyricLine[];
+
+    console.log("[LyriKana] parsed lyrics:", currentLyrics);
+    console.log("[LyriKana] parsed lyrics length:", currentLyrics.length);
+
     currentLineIndex = -1;
 
     if (currentLyrics.length === 0) {
@@ -197,16 +231,19 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
 
     updateLyricsDisplay(currentLyrics[0], currentLyrics[1] ?? null);
   } catch (error) {
-    console.error("LyriKana lyrics error:", error);
+    console.error("[LyriKana] fetchLyrics error:", error);
     resetLyrics("Lyrics error");
   }
 }
 
 async function handleSongChange(): Promise<void> {
   const song = getSongInfo();
+  console.log("[LyriKana] song info:", song);
   if (!song) return;
 
   const songKey = `${song.title} - ${song.artist}`;
+  console.log("[LyriKana] song key:", songKey);
+
   if (songKey === lastSongKey) return;
 
   lastSongKey = songKey;
@@ -217,7 +254,7 @@ async function handleSongChange(): Promise<void> {
 function startObserver(): void {
   const target = document.querySelector("ytmusic-player-bar");
   if (!target) {
-    console.log("LyriKana: player not found");
+    console.log("[LyriKana] player not found");
     return;
   }
 
@@ -230,10 +267,13 @@ function startObserver(): void {
     subtree: true,
     characterData: true,
   });
+
+  console.log("[LyriKana] observer started");
 }
 
 window.addEventListener("load", () => {
   createLyricsOverlay();
+  console.log("[LyriKana] window loaded");
   startObserver();
   void handleSongChange();
   setInterval(updateLyricsByTime, 200);
