@@ -10,10 +10,10 @@ const DIGRAPH_TO_KR: Record<string, string> = {
   ぎゃ: "갸", ぎゅ: "규", ぎょ: "교",
 
   しゃ: "샤", しゅ: "슈", しょ: "쇼",
-  じゃ: "자", じゅ: "주", じょ: "조",
+  じゃ: "쟈", じゅ: "쥬", じょ: "죠",
 
-  ちゃ: "차", ちゅ: "추", ちょ: "초",
-  ぢゃ: "자", ぢゅ: "주", ぢょ: "조",
+  ちゃ: "챠", ちゅ: "츄", ちょ: "쵸",
+  ぢゃ: "쟈", ぢゅ: "쥬", ぢょ: "죠",
 
   にゃ: "냐", にゅ: "뉴", にょ: "뇨",
   ひゃ: "햐", ひゅ: "휴", ひょ: "효",
@@ -166,6 +166,35 @@ const KANA_TO_EN: Record<string, string> = {
 
 type Mode = "KR" | "JP" | "EN";
 
+const YOON_NORMALIZE_MAP: Record<string, string> = {
+  きや: "きゃ", きゆ: "きゅ", きよ: "きょ",
+  ぎや: "ぎゃ", ぎゆ: "ぎゅ", ぎよ: "ぎょ",
+
+  しや: "しゃ", しゆ: "しゅ", しよ: "しょ",
+  じや: "じゃ", じゆ: "じゅ", じよ: "じょ",
+  ぢや: "ぢゃ", ぢゆ: "ぢゅ", ぢよ: "ぢょ",
+
+  ちや: "ちゃ", ちゆ: "ちゅ", ちよ: "ちょ",
+
+  にや: "にゃ", にゆ: "にゅ", によ: "にょ",
+  ひや: "ひゃ", ひゆ: "ひゅ", ひよ: "ひょ",
+  びや: "びゃ", びゆ: "びゅ", びよ: "びょ",
+  ぴや: "ぴゃ", ぴゆ: "ぴゅ", ぴよ: "ぴょ",
+
+  みや: "みゃ", みゆ: "みゅ", みよ: "みょ",
+  りや: "りゃ", りゆ: "りゅ", りよ: "りょ",
+};
+
+function normalizeYoonKana(input: string): string {
+  let out = input;
+
+  for (const [from, to] of Object.entries(YOON_NORMALIZE_MAP)) {
+    out = out.replace(new RegExp(from, "g"), to);
+  }
+
+  return out;
+}
+
 function isSmallTsu(char: string): boolean {
   return char === "っ";
 }
@@ -231,27 +260,26 @@ function addFinalConsonant(char: string, jongseongIndex: number): string {
 
 function endsWithNieunBatchim(char: string): boolean {
   const parts = getHangulParts(char);
-  return !!parts && parts.jongseong === 4; // ㄴ
+  return !!parts && parts.jongseong === 4;
 }
 
 function startsWithLabial(token: string): boolean {
   return /^(바|비|부|베|보|파|피|푸|페|포|마|미|무|메|모)/.test(token);
 }
 
-function startsWithDentalOrAlveolar(token: string): boolean {
-  return /^(다|디|두|데|도|타|티|투|테|토|나|니|누|네|노|라|리|루|레|로|자|지|주|제|조|차|치|추|체|초|사|시|스|세|소)/.test(token);
-}
-
-function startsWithVelar(token: string): boolean {
-  return /^(가|기|구|게|고|카|키|쿠|케|코)/.test(token);
+function isSmallKana(char: string): boolean {
+  return /[ゃゅょぁぃぅぇぉゎ]/.test(char);
 }
 
 function getNextUnit(reading: string, index: number): { unit: string; nextIndex: number } {
-  const two = reading.slice(index, index + 2);
-  if (two.length === 2) {
-    return { unit: two, nextIndex: index + 2 };
+  const current = reading[index] ?? "";
+  const next = reading[index + 1] ?? "";
+
+  if (next && isSmallKana(next)) {
+    return { unit: current + next, nextIndex: index + 2 };
   }
-  return { unit: reading[index], nextIndex: index + 1 };
+
+  return { unit: current, nextIndex: index + 1 };
 }
 
 function getMappedToken(unit: string, mode: Mode): string {
@@ -271,7 +299,6 @@ function duplicateInitialConsonant(token: string, mode: Mode): string {
     return token[0] + token;
   }
 
-  const first = token[0];
   const map: Record<string, string> = {
     카: "까", 키: "끼", 쿠: "꾸", 케: "께", 코: "꼬",
     타: "따", 치: "찌", 차: "짜", 추: "쭈", 초: "쪼",
@@ -288,68 +315,98 @@ function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): voi
   const lastToken = tokens[tokens.length - 1];
   if (!lastToken) return;
 
-  if (mode === "EN") {
-    const vowel = getVowelFromKanaUnit(previousUnit);
-    if (vowel) {
-      tokens[tokens.length - 1] = lastToken + vowel;
-    }
-    return;
-  }
-
-  const lastChar = getLastHangulSyllable(lastToken);
-  if (!isHangulSyllable(lastChar)) {
+  const vowel = getVowelFromKanaUnit(previousUnit);
+  if (!vowel) {
     tokens[tokens.length - 1] = lastToken + "ー";
     return;
   }
 
-  const parts = getHangulParts(lastChar);
-  if (!parts) return;
+  if (mode === "EN") {
+    tokens[tokens.length - 1] = lastToken + vowel;
+    return;
+  }
 
-  const vowelMap: Record<number, number> = {
-    0: 0,   // ㅏ
-    1: 1,   // ㅐ
-    2: 2,   // ㅑ
-    3: 3,   // ㅒ
-    4: 4,   // ㅓ
-    5: 5,   // ㅔ
-    6: 6,   // ㅕ
-    7: 7,   // ㅖ
-    8: 8,   // ㅗ
-    12: 12, // ㅛ
-    13: 13, // ㅜ
-    17: 17, // ㅠ
-    18: 18, // ㅡ
-    20: 20, // ㅣ
+  const longVowelMapKR: Record<string, string> = {
+    a: "아",
+    i: "이",
+    u: "우",
+    e: "에",
+    o: "오",
   };
 
-  const duplicated = String.fromCharCode(
-    0xac00 + parts.choseong * 588 + (vowelMap[parts.jungseong] ?? parts.jungseong) * 28 + parts.jongseong
-  );
+  const longVowelMapJP: Record<string, string> = {
+    a: "아",
+    i: "이",
+    u: "우",
+    e: "에",
+    o: "오",
+  };
 
-  tokens[tokens.length - 1] = lastToken + duplicated[lastToken.length - 1];
+  const extra =
+    mode === "KR"
+      ? longVowelMapKR[vowel]
+      : longVowelMapJP[vowel];
+
+  tokens[tokens.length - 1] = lastToken + extra;
 }
 
 function postProcessKR(text: string): string {
   return text
+    .replace(/기야/g, "갸")
+    .replace(/기유/g, "규")
+    .replace(/기요/g, "교")
+
+    .replace(/기야/g, "갸")
+    .replace(/기유/g, "규")
+    .replace(/기요/g, "교")
+
     .replace(/시야/g, "샤")
     .replace(/시유/g, "슈")
-    .replace(/시오/g, "쇼")
+    .replace(/시요/g, "쇼")
+
     .replace(/지야/g, "자")
     .replace(/지유/g, "주")
-    .replace(/지오/g, "조")
+    .replace(/지요/g, "조")
+
     .replace(/치야/g, "차")
     .replace(/치유/g, "추")
-    .replace(/치오/g, "초");
+    .replace(/치요/g, "초")
+
+    .replace(/니야/g, "냐")
+    .replace(/니유/g, "뉴")
+    .replace(/니요/g, "뇨")
+
+    .replace(/히야/g, "햐")
+    .replace(/히유/g, "휴")
+    .replace(/히요/g, "효")
+
+    .replace(/비야/g, "뱌")
+    .replace(/비유/g, "뷰")
+    .replace(/비요/g, "뵤")
+
+    .replace(/피야/g, "퍄")
+    .replace(/피유/g, "퓨")
+    .replace(/피요/g, "표")
+
+    .replace(/미야/g, "먀")
+    .replace(/미유/g, "뮤")
+    .replace(/미요/g, "묘")
+
+    .replace(/리야/g, "랴")
+    .replace(/리유/g, "류")
+    .replace(/리요/g, "료");
 }
 
 function convertKana(reading: string, mode: Mode): string {
+  const normalizedReading = normalizeYoonKana(reading);
+
   const tokens: string[] = [];
   let i = 0;
   let pendingSokuon = false;
   let previousUnit = "";
 
-  while (i < reading.length) {
-    const char = reading[i];
+  while (i < normalizedReading.length) {
+    const char = normalizedReading[i];
 
     if (isSmallTsu(char)) {
       pendingSokuon = true;
@@ -363,7 +420,7 @@ function convertKana(reading: string, mode: Mode): string {
       continue;
     }
 
-    const lookaheadTwo = reading.slice(i, i + 2);
+    const lookaheadTwo = normalizedReading.slice(i, i + 2);
     const isDigraph =
       lookaheadTwo.length === 2 &&
       (mode === "KR"
@@ -374,12 +431,12 @@ function convertKana(reading: string, mode: Mode): string {
 
     const { unit, nextIndex } = isDigraph
       ? { unit: lookaheadTwo, nextIndex: i + 2 }
-      : getNextUnit(reading, i);
+      : getNextUnit(normalizedReading, i);
 
     if (mode === "KR" && unit === "ん") {
-      const nextTwo = reading.slice(nextIndex, nextIndex + 2);
+      const nextTwo = normalizedReading.slice(nextIndex, nextIndex + 2);
       const nextIsDigraph = nextTwo.length === 2 && nextTwo in DIGRAPH_TO_KR;
-      const nextUnit = nextIsDigraph ? nextTwo : reading[nextIndex] ?? "";
+      const nextUnit = nextIsDigraph ? nextTwo : normalizedReading[nextIndex] ?? "";
       const nextToken = nextUnit ? getMappedToken(nextUnit, "KR") : "";
 
       const last = tokens[tokens.length - 1];
@@ -387,14 +444,10 @@ function convertKana(reading: string, mode: Mode): string {
       if (last && last.length > 0) {
         const lastChar = last[last.length - 1];
 
-        if (startsWithLabial(nextToken) && isHangulSyllable(lastChar) && !hasFinalConsonant(lastChar)) {
-          tokens[tokens.length - 1] = last.slice(0, -1) + addFinalConsonant(lastChar, 16); // ㅁ
-        } else if (
-          (startsWithDentalOrAlveolar(nextToken) || startsWithVelar(nextToken) || nextToken === "") &&
-          isHangulSyllable(lastChar) &&
-          !hasFinalConsonant(lastChar)
-        ) {
-          tokens[tokens.length - 1] = last.slice(0, -1) + addFinalConsonant(lastChar, 4); // ㄴ
+        if (isHangulSyllable(lastChar) && !hasFinalConsonant(lastChar)) {
+          const jong = startsWithLabial(nextToken) ? 16 : 4;
+          tokens[tokens.length - 1] =
+            last.slice(0, -1) + addFinalConsonant(lastChar, jong);
         } else {
           tokens.push(startsWithLabial(nextToken) ? "ㅁ" : "ㄴ");
         }
@@ -423,7 +476,7 @@ function convertKana(reading: string, mode: Mode): string {
       if (prev && curr) {
         const lastChar = prev[prev.length - 1];
         if (endsWithNieunBatchim(lastChar) && startsWithLabial(curr)) {
-          tokens[tokens.length - 2] = prev.slice(0, -1) + replaceFinalConsonant(lastChar, 16); // ㅁ
+          tokens[tokens.length - 2] = prev.slice(0, -1) + replaceFinalConsonant(lastChar, 16);
         }
       }
     }

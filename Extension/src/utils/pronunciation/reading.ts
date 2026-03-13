@@ -14,8 +14,9 @@ function isKana(text: string): boolean {
 export function getTokenizer() {
   if (!tokenizerPromise) {
     tokenizerPromise = new Promise((resolve, reject) => {
+
       if (typeof kuromoji === "undefined") {
-        reject(new Error("kuromoji global is not loaded"));
+        reject(new Error("kuromoji global not loaded"));
         return;
       }
 
@@ -26,13 +27,14 @@ export function getTokenizer() {
           dicPath: chrome.runtime.getURL("dict") + "/",
         })
         .build((err: any, tokenizer: any) => {
+
           if (err) {
-            console.error("[LyriKana] kuromoji tokenizer error:", err);
+            console.error("[LyriKana] tokenizer error:", err);
             reject(err);
             return;
           }
 
-          console.log("[LyriKana] kuromoji tokenizer ready");
+          console.log("[LyriKana] tokenizer ready");
           resolve(tokenizer);
         });
     });
@@ -42,6 +44,7 @@ export function getTokenizer() {
 }
 
 export async function getJapaneseReading(text: string): Promise<string> {
+
   const normalized = text.trim();
   if (!normalized) return "";
 
@@ -50,22 +53,31 @@ export async function getJapaneseReading(text: string): Promise<string> {
 
   const tokenizer = await getTokenizer();
   const tokens = tokenizer.tokenize(normalized);
+  // console.error(
+  //   "[LyriKana] token debug",
+  //   tokens.map((token: any) => ({
+  //     surface: token.surface_form,
+  //     word_type: token.word_type,
+  //     reading: token.reading,
+  //     pronunciation: token.pronunciation,
+  //     pos: token.pos,
+  //   }))
+  // );
+
+  console.log("[LyriKana] tokens:", tokens);
 
   const reading = tokens
     .map((token: any) => {
+
       const raw =
         token.pronunciation && token.pronunciation !== "*"
           ? token.pronunciation
           : token.reading && token.reading !== "*"
-            ? token.reading
-            : token.surface_form ?? "";
+          ? token.reading
+          : token.surface_form ?? "";
 
       if (isKana(raw)) {
         return katakanaToHiragana(raw);
-      }
-
-      if (!isKana(raw) && /[一-龯々]/.test(raw)) {
-        console.log("[LyriKana] unresolved kanji token:", token);
       }
 
       return raw;

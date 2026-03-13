@@ -238,13 +238,14 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
 
 async function handleSongChange(): Promise<void> {
   const song = getSongInfo();
-  console.log("[LyriKana] song info:", song);
   if (!song) return;
-
+  
   const songKey = `${song.title} - ${song.artist}`;
-  console.log("[LyriKana] song key:", songKey);
 
   if (songKey === lastSongKey) return;
+
+  console.log("[LyriKana] song info:", song);
+  console.log("[LyriKana] song key:", songKey);
 
   lastSongKey = songKey;
   resetLyrics("Loading lyrics...");

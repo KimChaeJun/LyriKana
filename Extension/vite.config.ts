@@ -1,11 +1,11 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { viteStaticCopy } from "vite-plugin-static-copy";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
+  publicDir: "public",
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -19,13 +19,4 @@ export default defineConfig({
       },
     },
   },
-  plugins: [
-    viteStaticCopy({
-      targets: [
-        { src: "manifest.json", dest: "." },
-        { src: "public/dict", dest: "." },
-        { src: "public/vendor", dest: "." }
-      ],
-    }),
-  ],
 });

@@ -1,5 +1,5 @@
-import { buildPronunciation } from "./converters";
 import { getJapaneseReading } from "./reading";
+import { buildPronunciation } from "./converters";
 
 export type LyricLine = {
   time: number;
@@ -18,12 +18,19 @@ export async function buildLyricLine(
   let reading = original;
 
   try {
+
     reading = await getJapaneseReading(original);
-  } catch (error) {
-    console.error("[LyriKana] reading fallback used:", {
+
+    console.log("[LyriKana] reading:", {
       original,
-      error,
+      reading
     });
+
+  } catch (err) {
+
+    console.error("[LyriKana] reading fallback:", err);
+
+    reading = original;
   }
 
   const pronunciation = buildPronunciation(reading);
