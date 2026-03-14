@@ -1,5 +1,6 @@
-import { getJapaneseReading } from "./reading";
+import { getJapaneseReadingWithTokens } from "./reading";
 import { buildPronunciation } from "./converters";
+import type { TokenLite } from "./specialReadingRules";
 
 export type LyricLine = {
   time: number;
@@ -15,20 +16,25 @@ export async function buildLyricLine(
   original: string
 ): Promise<LyricLine> {
   let reading = original;
+  let tokens: TokenLite[] = [];
 
   try {
-    reading = await getJapaneseReading(original);
+    const readingResult = await getJapaneseReadingWithTokens(original);
+    reading = readingResult.reading;
+    tokens = readingResult.tokens;
 
     console.log("[LyriKana] reading:", {
       original,
       reading,
+      tokens,
     });
   } catch (err) {
     console.error("[LyriKana] reading fallback:", err);
     reading = original;
+    tokens = [];
   }
 
-  const pronunciation = buildPronunciation(reading);
+  const pronunciation = buildPronunciation(reading, original, tokens);
 
   return {
     time,

@@ -15,6 +15,7 @@ let currentLineIndex = -1;
 
 const INTRO_TEXT = "♪ 전주 ♪";
 const INSTRUMENTAL_TEXT = "♪ 간주 ♪";
+const PREVIEW_LEAD_TIME = 0.3;
 
 function cleanTitle(title: string): string {
   if (title.includes(" - ")) {
@@ -107,6 +108,7 @@ function createLyricsOverlay(): void {
   overlay.appendChild(krLine);
   overlay.appendChild(nextLine);
   document.body.appendChild(overlay);
+
   console.log("[LyriKana] overlay created");
 }
 
@@ -158,7 +160,6 @@ function estimateLineDuration(line: LyricLine): number {
   }
 
   const estimated = units * 0.24 + 0.9;
-
   return Math.min(8.5, Math.max(2.4, estimated));
 }
 
@@ -170,7 +171,7 @@ function updateLyricsByTime(): void {
   let newIndex = -1;
 
   for (let i = 0; i < currentLyrics.length; i++) {
-    if (currentTime >= currentLyrics[i].time) {
+    if (currentTime >= currentLyrics[i].time - PREVIEW_LEAD_TIME) {
       newIndex = i;
     } else {
       break;
@@ -196,7 +197,7 @@ function updateLyricsByTime(): void {
     const isLikelyInstrumental =
       gap >= 7 &&
       currentTime >= estimatedEnd &&
-      remainingToNext >= 1.8;
+      remainingToNext >= PREVIEW_LEAD_TIME;
 
     if (isLikelyInstrumental) {
       if (currentLineIndex !== -2) {
@@ -208,12 +209,13 @@ function updateLyricsByTime(): void {
   }
 
   if (newIndex !== currentLineIndex) {
-    // console.log("[LyriKana] line change:", {
-    //   newIndex,
-    //   currentTime,
-    //   currentLine: currentLyrics[newIndex],
-    //   nextLine: currentLyrics[newIndex + 1],
-    // });
+    console.log("[LyriKana] line change:", {
+      newIndex,
+      currentTime,
+      currentLine: currentLyrics[newIndex],
+      nextLine: currentLyrics[newIndex + 1],
+    });
+
     currentLineIndex = newIndex;
     updateLyricsDisplay(currentLine, nextLine);
   }
@@ -230,7 +232,7 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
     const res = await fetch(url);
     const data = await res.json();
 
-    // console.log("[LyriKana] lyrics api response:", data);
+    console.log("[LyriKana] lyrics api response:", data);
 
     if (!Array.isArray(data) || data.length === 0) {
       resetLyrics("Lyrics not found");
@@ -238,7 +240,7 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
     }
 
     const song = data.find((item) => item?.syncedLyrics) ?? data[0];
-    // console.log("[LyriKana] selected song:", song);
+    console.log("[LyriKana] selected song:", song);
 
     if (!song?.syncedLyrics) {
       resetLyrics("Synced lyrics not available");
@@ -247,12 +249,10 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
 
     updateLyricsDisplay(null, null, "Analyzing pronunciation...");
 
-    currentLyrics = (await parseLrcWithPronunciation(
-      song.syncedLyrics
-    )) as LyricLine[];
+    currentLyrics = (await parseLrcWithPronunciation(song.syncedLyrics)) as LyricLine[];
 
-    // console.log("[LyriKana] parsed lyrics:", currentLyrics);
-    // console.log("[LyriKana] parsed lyrics length:", currentLyrics.length);
+    console.log("[LyriKana] parsed lyrics:", currentLyrics);
+    console.log("[LyriKana] parsed lyrics length:", currentLyrics.length);
 
     currentLineIndex = -1;
 
@@ -271,13 +271,12 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
 async function handleSongChange(): Promise<void> {
   const song = getSongInfo();
   if (!song) return;
-  
-  const songKey = `${song.title} - ${song.artist}`;
 
+  const songKey = `${song.title} - ${song.artist}`;
   if (songKey === lastSongKey) return;
 
-  // console.log("[LyriKana] song info:", song);
-  // console.log("[LyriKana] song key:", songKey);
+  console.log("[LyriKana] song info:", song);
+  console.log("[LyriKana] song key:", songKey);
 
   lastSongKey = songKey;
   resetLyrics("Loading lyrics...");
@@ -301,7 +300,7 @@ function startObserver(): void {
     characterData: true,
   });
 
-  // console.log("[LyriKana] observer started");
+  console.log("[LyriKana] observer started");
 }
 
 window.addEventListener("load", () => {
@@ -311,4 +310,3 @@ window.addEventListener("load", () => {
   void handleSongChange();
   setInterval(updateLyricsByTime, 200);
 });
-

@@ -1,9 +1,13 @@
-type PronunciationResult = {
+import type { TokenLite } from "./specialReadingRules";
+
+export type PronunciationResult = {
   reading: string;
   kr: string;
   jp: string;
   en: string;
 };
+
+type Mode = "KR" | "JP" | "EN";
 
 const DIGRAPH_TO_KR: Record<string, string> = {
   きゃ: "캬", きゅ: "큐", きょ: "쿄",
@@ -11,9 +15,9 @@ const DIGRAPH_TO_KR: Record<string, string> = {
 
   しゃ: "샤", しゅ: "슈", しょ: "쇼",
   じゃ: "쟈", じゅ: "쥬", じょ: "죠",
-
-  ちゃ: "챠", ちゅ: "츄", ちょ: "쵸",
   ぢゃ: "쟈", ぢゅ: "쥬", ぢょ: "죠",
+
+  ちゃ: "차", ちゅ: "추", ちょ: "초",
 
   にゃ: "냐", にゅ: "뉴", にょ: "뇨",
   ひゃ: "햐", ひゅ: "휴", ひょ: "효",
@@ -26,7 +30,7 @@ const DIGRAPH_TO_KR: Record<string, string> = {
   ふぁ: "화", ふぃ: "휘", ふぇ: "훼", ふぉ: "호",
   てぃ: "티", でぃ: "디",
   とぅ: "투", どぅ: "두",
-  ちぇ: "체", しぇ: "셰", じぇ: "제",
+  しぇ: "셰", じぇ: "제", ちぇ: "체",
 };
 
 const DIGRAPH_TO_JP: Record<string, string> = {
@@ -35,9 +39,9 @@ const DIGRAPH_TO_JP: Record<string, string> = {
 
   しゃ: "샤", しゅ: "슈", しょ: "쇼",
   じゃ: "쟈", じゅ: "쥬", じょ: "죠",
+  ぢゃ: "쟈", ぢゅ: "쥬", ぢょ: "죠",
 
   ちゃ: "챠", ちゅ: "츄", ちょ: "쵸",
-  ぢゃ: "쟈", ぢゅ: "쥬", ぢょ: "죠",
 
   にゃ: "냐", にゅ: "뉴", にょ: "뇨",
   ひゃ: "햐", ひゅ: "휴", ひょ: "효",
@@ -50,7 +54,7 @@ const DIGRAPH_TO_JP: Record<string, string> = {
   ふぁ: "화", ふぃ: "휘", ふぇ: "훼", ふぉ: "호",
   てぃ: "티", でぃ: "디",
   とぅ: "투", どぅ: "두",
-  ちぇ: "체", しぇ: "셰", じぇ: "제",
+  しぇ: "셰", じぇ: "제", ちぇ: "체",
 };
 
 const DIGRAPH_TO_EN: Record<string, string> = {
@@ -59,9 +63,9 @@ const DIGRAPH_TO_EN: Record<string, string> = {
 
   しゃ: "sha", しゅ: "shu", しょ: "sho",
   じゃ: "ja", じゅ: "ju", じょ: "jo",
+  ぢゃ: "ja", ぢゅ: "ju", ぢょ: "jo",
 
   ちゃ: "cha", ちゅ: "chu", ちょ: "cho",
-  ぢゃ: "ja", ぢゅ: "ju", ぢょ: "jo",
 
   にゃ: "nya", にゅ: "nyu", にょ: "nyo",
   ひゃ: "hya", ひゅ: "hyu", ひょ: "hyo",
@@ -74,7 +78,7 @@ const DIGRAPH_TO_EN: Record<string, string> = {
   ふぁ: "fa", ふぃ: "fi", ふぇ: "fe", ふぉ: "fo",
   てぃ: "ti", でぃ: "di",
   とぅ: "tu", どぅ: "du",
-  ちぇ: "che", しぇ: "she", じぇ: "je",
+  しぇ: "she", じぇ: "je", ちぇ: "che",
 };
 
 const KANA_TO_KR: Record<string, string> = {
@@ -164,8 +168,6 @@ const KANA_TO_EN: Record<string, string> = {
   ー: "-",
 };
 
-type Mode = "KR" | "JP" | "EN";
-
 const YOON_NORMALIZE_MAP: Record<string, string> = {
   きや: "きゃ", きゆ: "きゅ", きよ: "きょ",
   ぎや: "ぎゃ", ぎゆ: "ぎゅ", ぎよ: "ぎょ",
@@ -185,13 +187,17 @@ const YOON_NORMALIZE_MAP: Record<string, string> = {
   りや: "りゃ", りゆ: "りゅ", りよ: "りょ",
 };
 
+function katakanaToHiragana(input: string): string {
+  return input.replace(/[\u30a1-\u30f6]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) - 0x60)
+  );
+}
+
 function normalizeYoonKana(input: string): string {
   let out = input;
-
   for (const [from, to] of Object.entries(YOON_NORMALIZE_MAP)) {
     out = out.replace(new RegExp(from, "g"), to);
   }
-
   return out;
 }
 
@@ -201,6 +207,10 @@ function isSmallTsu(char: string): boolean {
 
 function isLongVowel(char: string): boolean {
   return char === "ー";
+}
+
+function isSmallKana(char: string): boolean {
+  return /[ゃゅょぁぃぅぇぉゎ]/.test(char);
 }
 
 function getVowelFromKanaUnit(unit: string): string {
@@ -213,10 +223,6 @@ function getVowelFromKanaUnit(unit: string): string {
   if (/[おこごそぞとのほぼぽもよろをぉょ]/.test(last)) return "o";
 
   return "";
-}
-
-function getLastHangulSyllable(token: string): string {
-  return token[token.length - 1] ?? "";
 }
 
 function isHangulSyllable(char: string): boolean {
@@ -258,21 +264,6 @@ function addFinalConsonant(char: string, jongseongIndex: number): string {
   );
 }
 
-function addSokuonAsBatchim(tokens: string[]): boolean {
-  if (tokens.length === 0) return false;
-
-  const last = tokens[tokens.length - 1];
-  if (!last) return false;
-
-  const lastChar = last[last.length - 1];
-  if (!isHangulSyllable(lastChar)) return false;
-  if (hasFinalConsonant(lastChar)) return false;
-
-  // jongseong 19 = ㅅ
-  tokens[tokens.length - 1] = last.slice(0, -1) + addFinalConsonant(lastChar, 19);
-  return true;
-}
-
 function endsWithNieunBatchim(char: string): boolean {
   const parts = getHangulParts(char);
   return !!parts && parts.jongseong === 4;
@@ -280,10 +271,6 @@ function endsWithNieunBatchim(char: string): boolean {
 
 function startsWithLabial(token: string): boolean {
   return /^(바|비|부|베|보|파|피|푸|페|포|마|미|무|메|모)/.test(token);
-}
-
-function isSmallKana(char: string): boolean {
-  return /[ゃゅょぁぃぅぇぉゎ]/.test(char);
 }
 
 function getNextUnit(reading: string, index: number): { unit: string; nextIndex: number } {
@@ -316,12 +303,28 @@ function duplicateInitialConsonant(token: string, mode: Mode): string {
 
   const map: Record<string, string> = {
     카: "까", 키: "끼", 쿠: "꾸", 케: "께", 코: "꼬",
-    타: "따", 치: "찌", 차: "짜", 추: "쭈", 초: "쪼",
+    타: "따", 테: "떼", 토: "또",
+    치: "찌", 차: "짜", 추: "쭈", 초: "쪼",
     파: "빠", 피: "삐", 푸: "뿌", 페: "뻬", 포: "뽀",
     사: "싸", 시: "씨", 스: "쓰", 세: "쎄", 소: "쏘",
   };
 
   return map[token] ?? token;
+}
+
+function addSokuonAsBatchim(tokens: string[]): boolean {
+  if (tokens.length === 0) return false;
+
+  const last = tokens[tokens.length - 1];
+  if (!last) return false;
+
+  const lastChar = last[last.length - 1];
+  if (!isHangulSyllable(lastChar)) return false;
+  if (hasFinalConsonant(lastChar)) return false;
+
+  // jongseong 19 = ㅅ
+  tokens[tokens.length - 1] = last.slice(0, -1) + addFinalConsonant(lastChar, 19);
+  return true;
 }
 
 function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): void {
@@ -341,7 +344,7 @@ function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): voi
     return;
   }
 
-  const longVowelMapKR: Record<string, string> = {
+  const longVowelMap: Record<string, string> = {
     a: "아",
     i: "이",
     u: "우",
@@ -349,20 +352,7 @@ function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): voi
     o: "오",
   };
 
-  const longVowelMapJP: Record<string, string> = {
-    a: "아",
-    i: "이",
-    u: "우",
-    e: "에",
-    o: "오",
-  };
-
-  const extra =
-    mode === "KR"
-      ? longVowelMapKR[vowel]
-      : longVowelMapJP[vowel];
-
-  tokens[tokens.length - 1] = lastToken + extra;
+  tokens[tokens.length - 1] = lastToken + longVowelMap[vowel];
 }
 
 function postProcessKR(text: string): string {
@@ -370,50 +360,86 @@ function postProcessKR(text: string): string {
     .replace(/기야/g, "갸")
     .replace(/기유/g, "규")
     .replace(/기요/g, "교")
-
-    .replace(/기야/g, "갸")
-    .replace(/기유/g, "규")
-    .replace(/기요/g, "교")
-
     .replace(/시야/g, "샤")
     .replace(/시유/g, "슈")
     .replace(/시요/g, "쇼")
-
-    .replace(/지야/g, "자")
-    .replace(/지유/g, "주")
-    .replace(/지요/g, "조")
-
+    .replace(/지야/g, "쟈")
+    .replace(/지유/g, "쥬")
+    .replace(/지요/g, "죠")
     .replace(/치야/g, "차")
     .replace(/치유/g, "추")
     .replace(/치요/g, "초")
-
     .replace(/니야/g, "냐")
     .replace(/니유/g, "뉴")
     .replace(/니요/g, "뇨")
-
     .replace(/히야/g, "햐")
     .replace(/히유/g, "휴")
     .replace(/히요/g, "효")
-
     .replace(/비야/g, "뱌")
     .replace(/비유/g, "뷰")
     .replace(/비요/g, "뵤")
-
     .replace(/피야/g, "퍄")
     .replace(/피유/g, "퓨")
     .replace(/피요/g, "표")
-
     .replace(/미야/g, "먀")
     .replace(/미유/g, "뮤")
     .replace(/미요/g, "묘")
-
     .replace(/리야/g, "랴")
     .replace(/리유/g, "류")
     .replace(/리요/g, "료");
 }
 
+function isParticleHaToken(token: TokenLite | undefined): boolean {
+  return !!token && token.surface === "は" && token.pos === "助詞";
+}
+
+function applyParticleWaRuleFromTokens(
+  kr: string,
+  tokens: TokenLite[]
+): string {
+  if (!kr || tokens.length === 0) return kr;
+
+  const lastToken = tokens[tokens.length - 1];
+
+  // 마지막 토큰이 조사 は 인 경우만 와 처리
+  if (isParticleHaToken(lastToken) && kr.endsWith("하")) {
+    return kr.slice(0, -1) + "와";
+  }
+
+  return kr;
+}
+
+// function applyParticleWaRuleFromOriginal(
+//   original: string | undefined,
+//   reading: string,
+//   kr: string
+// ): string {
+//   if (!original) return kr;
+
+//   const trimmedOriginal = original.trim();
+
+//   if (trimmedOriginal.endsWith("は") && reading.endsWith("は") && kr.endsWith("하")) {
+//     return kr.slice(0, -1) + "와";
+//   }
+
+//   if (trimmedOriginal.endsWith("では") && kr.endsWith("데하")) {
+//     return kr.slice(0, -2) + "데와";
+//   }
+
+//   if (trimmedOriginal.endsWith("とは") && kr.endsWith("토하")) {
+//     return kr.slice(0, -2) + "토와";
+//   }
+
+//   if (trimmedOriginal.endsWith("には") && kr.endsWith("니하")) {
+//     return kr.slice(0, -2) + "니와";
+//   }
+
+//   return kr;
+// }
+
 function convertKana(reading: string, mode: Mode): string {
-  const normalizedReading = normalizeYoonKana(reading);
+  const hiraReading = katakanaToHiragana(reading);
+  const normalizedReading = normalizeYoonKana(hiraReading);
 
   const tokens: string[] = [];
   let i = 0;
@@ -449,8 +475,8 @@ function convertKana(reading: string, mode: Mode): string {
       (mode === "KR"
         ? lookaheadTwo in DIGRAPH_TO_KR
         : mode === "JP"
-          ? lookaheadTwo in DIGRAPH_TO_JP
-          : lookaheadTwo in DIGRAPH_TO_EN);
+        ? lookaheadTwo in DIGRAPH_TO_JP
+        : lookaheadTwo in DIGRAPH_TO_EN);
 
     const { unit, nextIndex } = isDigraph
       ? { unit: lookaheadTwo, nextIndex: i + 2 }
@@ -499,7 +525,8 @@ function convertKana(reading: string, mode: Mode): string {
       if (prev && curr) {
         const lastChar = prev[prev.length - 1];
         if (endsWithNieunBatchim(lastChar) && startsWithLabial(curr)) {
-          tokens[tokens.length - 2] = prev.slice(0, -1) + replaceFinalConsonant(lastChar, 16);
+          tokens[tokens.length - 2] =
+            prev.slice(0, -1) + replaceFinalConsonant(lastChar, 16);
         }
       }
     }
@@ -512,13 +539,24 @@ function convertKana(reading: string, mode: Mode): string {
   return mode === "KR" ? postProcessKR(joined) : joined;
 }
 
-export function buildPronunciation(reading: string): PronunciationResult {
-  const normalized = reading.trim();
+export function buildPronunciation(
+  reading: string,
+  original?: string,
+  tokens: TokenLite[] = []
+): PronunciationResult {
+  const normalized = katakanaToHiragana(reading.trim());
+
+  let kr = convertKana(normalized, "KR");
+  const jp = convertKana(normalized, "JP");
+  const en = convertKana(normalized, "EN");
+
+  // 1순위: 토큰 기반 조사 は -> 와
+  kr = applyParticleWaRuleFromTokens(kr, tokens);
 
   return {
     reading: normalized,
-    kr: convertKana(normalized, "KR"),
-    jp: convertKana(normalized, "JP"),
-    en: convertKana(normalized, "EN"),
+    kr,
+    jp,
+    en,
   };
 }
