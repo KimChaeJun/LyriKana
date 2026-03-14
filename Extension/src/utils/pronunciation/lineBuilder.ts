@@ -14,22 +14,17 @@ export async function buildLyricLine(
   time: number,
   original: string
 ): Promise<LyricLine> {
-
   let reading = original;
 
   try {
-
     reading = await getJapaneseReading(original);
 
     console.log("[LyriKana] reading:", {
       original,
-      reading
+      reading,
     });
-
   } catch (err) {
-
     console.error("[LyriKana] reading fallback:", err);
-
     reading = original;
   }
 

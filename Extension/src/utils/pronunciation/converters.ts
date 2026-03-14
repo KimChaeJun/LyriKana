@@ -258,6 +258,21 @@ function addFinalConsonant(char: string, jongseongIndex: number): string {
   );
 }
 
+function addSokuonAsBatchim(tokens: string[]): boolean {
+  if (tokens.length === 0) return false;
+
+  const last = tokens[tokens.length - 1];
+  if (!last) return false;
+
+  const lastChar = last[last.length - 1];
+  if (!isHangulSyllable(lastChar)) return false;
+  if (hasFinalConsonant(lastChar)) return false;
+
+  // jongseong 19 = ㅅ
+  tokens[tokens.length - 1] = last.slice(0, -1) + addFinalConsonant(lastChar, 19);
+  return true;
+}
+
 function endsWithNieunBatchim(char: string): boolean {
   const parts = getHangulParts(char);
   return !!parts && parts.jongseong === 4;
@@ -409,7 +424,15 @@ function convertKana(reading: string, mode: Mode): string {
     const char = normalizedReading[i];
 
     if (isSmallTsu(char)) {
-      pendingSokuon = true;
+      if (mode === "KR") {
+        const applied = addSokuonAsBatchim(tokens);
+        if (!applied) {
+          pendingSokuon = true;
+        }
+      } else {
+        pendingSokuon = true;
+      }
+
       i += 1;
       continue;
     }
