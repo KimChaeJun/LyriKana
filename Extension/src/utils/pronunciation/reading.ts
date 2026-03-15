@@ -76,11 +76,6 @@ function countHiragana(text: string): number {
   return matches ? matches.length : 0;
 }
 
-function countKanji(text: string): number {
-  const matches = text.match(/[一-龯々]/g);
-  return matches ? matches.length : 0;
-}
-
 function resolveTokenReading(token: any): string {
   const surface = token.surface_form ?? "";
   const reading = token.reading && token.reading !== "*" ? token.reading : "";
@@ -89,16 +84,16 @@ function resolveTokenReading(token: any): string {
   const pos = token.pos ?? "";
 
   // 조사 가나는 pronunciation 우선
-  // は -> わ, へ -> え 같은 실제 발음 반영
   if (pos === "助詞") {
     if (surface === "は" && pronunciation) {
-      return normalizeReadingText(pronunciation);
+      return normalizeReadingText(pronunciation); // ワ
     }
     if (surface === "へ" && pronunciation) {
-      return normalizeReadingText(pronunciation);
+      return normalizeReadingText(pronunciation); // エ
     }
-    if (surface === "を" && pronunciation) {
-      return normalizeReadingText(pronunciation);
+    if (surface === "を") {
+      // を 는 표기 친화적으로 유지
+      return "を";
     }
   }
 
@@ -203,6 +198,64 @@ export function getTokenizer() {
   return tokenizerPromise;
 }
 
+function getCounterCompoundReading(
+  current: TokenLite,
+  next: TokenLite | undefined
+): { reading: string; consumeNext: boolean } | null {
+  if (!next) return null;
+
+  const pair = `${current.surface}${next.surface}`;
+
+  const pairMap: Record<string, string> = {
+    一人: "ひとり",
+    二人: "ふたり",
+    一回: "いっかい",
+    一階: "いっかい",
+    一分: "いっぷん",
+    一本: "いっぽん",
+    一杯: "いっぱい",
+    一匹: "いっぴき",
+  };
+
+  if (pair in pairMap) {
+    return {
+      reading: pairMap[pair],
+      consumeNext: true,
+    };
+  }
+
+  return null;
+}
+
+function buildLocalReadingFromTokens(tokens: TokenLite[]): string {
+  const out: string[] = [];
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const current = tokens[i];
+    const next = tokens[i + 1];
+
+    const counterCompound = getCounterCompoundReading(current, next);
+    if (counterCompound) {
+      out.push(counterCompound.reading);
+      if (counterCompound.consumeNext) {
+        i += 1;
+      }
+      continue;
+    }
+
+    out.push(
+      resolveTokenReading({
+        surface_form: current.surface,
+        reading: current.reading,
+        pronunciation: current.pronunciation,
+        pos: current.pos,
+      })
+    );
+  }
+
+  return normalizeReadingText(out.join(""));
+}
+
 async function tokenizeAndBuildLocalReading(text: string): Promise<ReadingResult> {
   const tokenizer = await getTokenizer();
   const rawTokens = tokenizer.tokenize(text);
@@ -219,9 +272,7 @@ async function tokenizeAndBuildLocalReading(text: string): Promise<ReadingResult
 
   console.log("[LyriKana] token debug", debugTokens);
 
-  const localReading = rawTokens
-    .map((token: any) => resolveTokenReading(token))
-    .join("");
+  const localReading = buildLocalReadingFromTokens(tokens);
 
   return {
     tokens,
@@ -272,20 +323,56 @@ function fixesAiOCase(localReading: string, yahooReading: string): boolean {
   return local.includes("あいお") && yahoo.includes("いとお");
 }
 
+function fixesKunyomiMismatch(localReading: string, yahooReading: string): boolean {
+  const local = normalizeReadingText(localReading);
+  const yahoo = normalizeReadingText(yahooReading);
+
+  if (local.includes("しつく") && yahoo.includes("なく")) return true;
+  if (local.includes("あいお") && yahoo.includes("いとお")) return true;
+  if ((local.includes("こうむ") || local.includes("こーむ")) && yahoo.includes("かぶ")) {
+    return true;
+  }
+  if ((local.includes("ごに") || local.includes("のち")) && yahoo.includes("あと")) {
+    return true;
+  }
+
+  return false;
+}
+
 function breaksAiSouCase(original: string, localReading: string, yahooReading: string): boolean {
   const local = normalizeReadingText(localReading);
   const yahoo = normalizeReadingText(yahooReading);
 
   if (!original.includes("愛")) return false;
 
-  // 愛そう / 愛せ / 愛し  등에서 로컬의 あい 계열 정보가
-  // Yahoo 결과에서 통째로 사라지면 reject
   if (local.includes("あい") && !yahoo.includes("あい")) {
-    // 단, 愛お -> いとお 같은 정상 교정은 예외
     if (fixesAiOCase(local, yahoo)) {
       return false;
     }
     return true;
+  }
+
+  return false;
+}
+
+function breaksParticleWaCase(
+  tokens: TokenLite[],
+  localReading: string,
+  yahooReading: string
+): boolean {
+  const local = normalizeReadingText(localReading);
+  const yahoo = normalizeReadingText(yahooReading);
+
+  for (const token of tokens) {
+    if (
+      token.surface === "は" &&
+      token.pos === "助詞" &&
+      token.pronunciation === "ワ"
+    ) {
+      if (local.includes("わ") && !yahoo.includes("わ")) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -303,9 +390,6 @@ function fixesNumericCounterCase(localReading: string, yahooReading: string): bo
     "いちふん",
     "いちはい",
     "いちひき",
-    "いちまい",
-    "いちさい",
-    "いちじ",
   ];
 
   const yahooGoodHints = [
@@ -316,9 +400,6 @@ function fixesNumericCounterCase(localReading: string, yahooReading: string): bo
     "いっぷん",
     "いっぱい",
     "いっぴき",
-    "いちまい",
-    "いっさい",
-    "いちじ",
   ];
 
   return (
@@ -327,47 +408,28 @@ function fixesNumericCounterCase(localReading: string, yahooReading: string): bo
   );
 }
 
-function fixesKunyomiMismatch(localReading: string, yahooReading: string): boolean {
-  const local = normalizeReadingText(localReading);
-  const yahoo = normalizeReadingText(yahooReading);
-
-  if (local.includes("しつく") && yahoo.includes("なく")) return true;
-  if (local.includes("あいお") && yahoo.includes("いとお")) return true;
-  if ((local.includes("こうむ") || local.includes("こーむ")) && yahoo.includes("かぶ")) {
-    return true;
-  }
-  if ((local.includes("ごに") || local.includes("のち")) && yahoo.includes("あと")) {
-    return true;
-  }
-
-  return false;
-}
-
 function shouldPreferYahooReading(
   original: string,
   localReading: string,
-  yahooReading: string
+  yahooReading: string,
+  tokens: TokenLite[]
 ): boolean {
   const local = normalizeReadingText(localReading);
   const yahoo = normalizeReadingText(yahooReading);
 
   if (!yahoo) return false;
 
-  // 1. Yahoo가 명백히 문제를 고쳤으면 우선 채택
+  // Yahoo가 명확히 문제를 고쳤을 때만 적극 채택
   if (fixesAiOCase(local, yahoo)) return true;
   if (fixesNumericCounterCase(local, yahoo)) return true;
   if (fixesKunyomiMismatch(local, yahoo)) return true;
 
-  // 2. Yahoo가 정보를 날렸으면 reject
+  // Yahoo가 정보를 망치면 reject
   if (isSevereYahooShrink(local, yahoo)) return false;
   if (breaksAiSouCase(original, local, yahoo)) return false;
+  if (breaksParticleWaCase(tokens, local, yahoo)) return false;
 
-  // 3. 한자 포함 줄에서 Yahoo가 길이 유지 + local보다 덜 기계적이면 채택 가능
-  const localKanjiCount = countKanji(original);
-  if (localKanjiCount > 0 && yahoo.length >= local.length - 1) {
-    return true;
-  }
-
+  // 그 외에는 보수적으로 local 유지
   return false;
 }
 
@@ -420,7 +482,8 @@ export async function getJapaneseReadingWithTokens(
       const useYahoo = shouldPreferYahooReading(
         normalized,
         localReading,
-        yahooReading
+        yahooReading,
+        tokens
       );
 
       console.log("[LyriKana] fallback comparison:", {
