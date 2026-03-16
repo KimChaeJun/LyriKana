@@ -1,4 +1,8 @@
-import { parseLrcWithPronunciation } from "./utils/lyrics/parseLrcWithPronunciation";
+import {
+  enrichLyricsInBackground,
+  parseLrcBase,
+} from "./utils/lyrics/parseLrcWithPronunciation";
+import { getTokenizer } from "./utils/pronunciation/reading";
 
 type LyricLine = {
   time: number;
@@ -12,6 +16,9 @@ type LyricLine = {
 let lastSongKey: string | null = null;
 let currentLyrics: LyricLine[] = [];
 let currentLineIndex = -1;
+let activeLyricsRequestId = 0;
+let lastObservedTitle = "";
+let lastObservedArtist = "";
 
 const INTRO_TEXT = "♪ 전주 ♪";
 const INSTRUMENTAL_TEXT = "♪ 간주 ♪";
@@ -163,6 +170,14 @@ function estimateLineDuration(line: LyricLine): number {
   return Math.min(8.5, Math.max(2.4, estimated));
 }
 
+function refreshCurrentLineIfVisible(index: number): void {
+  if (index !== currentLineIndex) return;
+
+  const currentLine = currentLyrics[index];
+  const nextLine = currentLyrics[index + 1];
+  updateLyricsDisplay(currentLine, nextLine);
+}
+
 function updateLyricsByTime(): void {
   const player = document.querySelector("video") as HTMLVideoElement | null;
   if (!player || currentLyrics.length === 0) return;
@@ -221,16 +236,73 @@ function updateLyricsByTime(): void {
   }
 }
 
-async function fetchLyrics(title: string, artist: string): Promise<void> {
+async function enhanceLyricsProgressively(
+  lyrics: LyricLine[],
+  requestId: number
+): Promise<void> {
+  await enrichLyricsInBackground(lyrics, {
+    concurrency: 3,
+    shouldStop: () => requestId !== activeLyricsRequestId,
+    onLine: (index, builtLine) => {
+      if (requestId !== activeLyricsRequestId) return;
+      if (!currentLyrics[index]) return;
+
+      const originalBefore = currentLyrics[index].original;
+
+      currentLyrics[index] = {
+        ...currentLyrics[index],
+        ...builtLine,
+        original: originalBefore,
+      };
+
+      if (originalBefore !== builtLine.original) {
+        console.warn("[LyriKana] original mismatch detected:", {
+          index,
+          originalBefore,
+          builtOriginal: builtLine.original,
+        });
+      }
+
+      console.log("[LyriKana] progressive line update:", {
+        requestId,
+        index,
+        original: currentLyrics[index].original,
+        reading: currentLyrics[index].reading,
+      });
+
+      refreshCurrentLineIfVisible(index);
+    },
+    onError: (index, original, error) => {
+      if (requestId !== activeLyricsRequestId) return;
+      console.warn("[LyriKana] progressive build skipped:", {
+        requestId,
+        index,
+        original,
+        error,
+      });
+    },
+  });
+}
+
+async function fetchLyrics(
+  title: string,
+  artist: string,
+  requestId: number
+): Promise<void> {
   try {
     const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(
       title
     )}&artist_name=${encodeURIComponent(artist)}`;
 
-    console.log("[LyriKana] fetching lyrics:", { title, artist, url });
+    console.log("[LyriKana] fetching lyrics:", { title, artist, url, requestId });
 
     const res = await fetch(url);
     const data = await res.json();
+
+    if (requestId !== activeLyricsRequestId) {
+      console.log("[LyriKana] stale lyrics response ignored", { requestId });
+      return;
+    }
 
     console.log("[LyriKana] lyrics api response:", data);
 
@@ -247,14 +319,15 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
       return;
     }
 
-    updateLyricsDisplay(null, null, "Analyzing pronunciation...");
-
-    currentLyrics = (await parseLrcWithPronunciation(song.syncedLyrics)) as LyricLine[];
-
-    console.log("[LyriKana] parsed lyrics:", currentLyrics);
-    console.log("[LyriKana] parsed lyrics length:", currentLyrics.length);
-
+    const baseLyrics = parseLrcBase(song.syncedLyrics) as LyricLine[];
+    currentLyrics = baseLyrics.map((line) => ({ ...line }));
     currentLineIndex = -1;
+
+    console.log("[LyriKana] base lyrics parsed:", {
+      requestId,
+      count: currentLyrics.length,
+      sample: currentLyrics.slice(0, 3),
+    });
 
     if (currentLyrics.length === 0) {
       resetLyrics("No lyric lines");
@@ -262,7 +335,10 @@ async function fetchLyrics(title: string, artist: string): Promise<void> {
     }
 
     updateLyricsDisplay(currentLyrics[0], currentLyrics[1] ?? null);
+
+    void enhanceLyricsProgressively(currentLyrics, requestId);
   } catch (error) {
+    if (requestId !== activeLyricsRequestId) return;
     console.error("[LyriKana] fetchLyrics error:", error);
     resetLyrics("Lyrics error");
   }
@@ -279,8 +355,11 @@ async function handleSongChange(): Promise<void> {
   console.log("[LyriKana] song key:", songKey);
 
   lastSongKey = songKey;
+  activeLyricsRequestId += 1;
+  const requestId = activeLyricsRequestId;
+
   resetLyrics("Loading lyrics...");
-  await fetchLyrics(song.title, song.artist);
+  await fetchLyrics(song.title, song.artist, requestId);
 }
 
 function startObserver(): void {
@@ -291,6 +370,15 @@ function startObserver(): void {
   }
 
   const observer = new MutationObserver(() => {
+    const song = getSongInfo();
+    if (!song) return;
+
+    if (song.title === lastObservedTitle && song.artist === lastObservedArtist) {
+      return;
+    }
+
+    lastObservedTitle = song.title;
+    lastObservedArtist = song.artist;
     void handleSongChange();
   });
 
@@ -306,6 +394,11 @@ function startObserver(): void {
 window.addEventListener("load", () => {
   createLyricsOverlay();
   console.log("[LyriKana] window loaded");
+
+  void getTokenizer().catch((error) => {
+    console.warn("[LyriKana] tokenizer preload failed:", error);
+  });
+
   startObserver();
   void handleSongChange();
   setInterval(updateLyricsByTime, 200);

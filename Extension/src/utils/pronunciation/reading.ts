@@ -6,10 +6,11 @@ import {
 declare const kuromoji: any;
 
 let tokenizerPromise: Promise<any> | null = null;
-const readingCache = new Map<string, string>();
+const readingCache = new Map<string, ReadingResult>();
 
 const FURIGANA_PROXY_URL =
   "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev";
+const YAHOO_TIMEOUT_MS = 2500;
 
 export type ReadingResult = {
   reading: string;
@@ -86,13 +87,12 @@ function resolveTokenReading(token: any): string {
   // 조사 가나는 pronunciation 우선
   if (pos === "助詞") {
     if (surface === "は" && pronunciation) {
-      return normalizeReadingText(pronunciation); // ワ
+      return normalizeReadingText(pronunciation);
     }
     if (surface === "へ" && pronunciation) {
-      return normalizeReadingText(pronunciation); // エ
+      return normalizeReadingText(pronunciation);
     }
     if (surface === "を") {
-      // を 는 표기 친화적으로 유지
       return "を";
     }
   }
@@ -122,6 +122,9 @@ function flattenYahooWords(words: any[]): string {
 }
 
 async function getYahooReading(text: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), YAHOO_TIMEOUT_MS);
+
   try {
     const res = await fetch(FURIGANA_PROXY_URL, {
       method: "POST",
@@ -129,6 +132,7 @@ async function getYahooReading(text: string): Promise<string | null> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     });
 
     if (!res.ok) {
@@ -154,6 +158,8 @@ async function getYahooReading(text: string): Promise<string | null> {
   } catch (error) {
     console.warn("[LyriKana] Yahoo reading fallback failed:", error);
     return null;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
@@ -289,20 +295,19 @@ function shouldTryYahooFallback(
     return { shouldTry: false, reasons: [] };
   }
 
+  // 긴 줄까지 전부 Yahoo fallback 보내면 체감속도가 너무 느려짐
+  if (original.length > 24) {
+    return {
+      shouldTry: false,
+      reasons: ["skip yahoo fallback for long line"],
+    };
+  }
+
   const special = detectSpecialReadingCase(original, localReading, tokens);
   if (special.shouldFallback) {
     return {
       shouldTry: true,
       reasons: special.reasons,
-    };
-  }
-
-  const normalized = normalizeReadingText(localReading);
-
-  if (normalized === katakanaToHiragana(original)) {
-    return {
-      shouldTry: true,
-      reasons: ["reading looks too close to raw surface text"],
     };
   }
 
@@ -419,17 +424,14 @@ function shouldPreferYahooReading(
 
   if (!yahoo) return false;
 
-  // Yahoo가 명확히 문제를 고쳤을 때만 적극 채택
   if (fixesAiOCase(local, yahoo)) return true;
   if (fixesNumericCounterCase(local, yahoo)) return true;
   if (fixesKunyomiMismatch(local, yahoo)) return true;
 
-  // Yahoo가 정보를 망치면 reject
   if (isSevereYahooShrink(local, yahoo)) return false;
   if (breaksAiSouCase(original, local, yahoo)) return false;
   if (breaksParticleWaCase(tokens, local, yahoo)) return false;
 
-  // 그 외에는 보수적으로 local 유지
   return false;
 }
 
@@ -448,14 +450,7 @@ export async function getJapaneseReadingWithTokens(
 
   const cached = readingCache.get(normalized);
   if (cached) {
-    const tokenizer = await getTokenizer();
-    const rawTokens = tokenizer.tokenize(normalized);
-    const tokens = rawTokens.map((token: any) => toTokenLite(token));
-
-    return {
-      reading: cached,
-      tokens,
-    };
+    return cached;
   }
 
   const { tokens, reading: localReading } =
@@ -498,7 +493,13 @@ export async function getJapaneseReadingWithTokens(
   }
 
   finalReading = normalizeReadingText(finalReading);
-  readingCache.set(normalized, finalReading);
+
+  const result = {
+    reading: finalReading,
+    tokens,
+  };
+
+  readingCache.set(normalized, result);
 
   console.log("[LyriKana] final reading:", {
     original: normalized,
@@ -506,8 +507,5 @@ export async function getJapaneseReadingWithTokens(
     finalReading,
   });
 
-  return {
-    reading: finalReading,
-    tokens,
-  };
+  return result;
 }
