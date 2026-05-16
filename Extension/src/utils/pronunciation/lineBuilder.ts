@@ -1,4 +1,7 @@
-import { getJapaneseReadingWithTokens } from "./reading";
+import {
+  getJapaneseReadingWithTokens,
+  getLocalJapaneseReadingWithTokens,
+} from "./reading";
 import { buildPronunciation } from "./converters";
 import type { TokenLite } from "./specialReadingRules";
 
@@ -15,11 +18,30 @@ export async function buildLyricLine(
   time: number,
   original: string
 ): Promise<LyricLine> {
+  return buildLyricLineWithReader(time, original, getJapaneseReadingWithTokens);
+}
+
+export async function buildFastLyricLine(
+  time: number,
+  original: string
+): Promise<LyricLine> {
+  return buildLyricLineWithReader(
+    time,
+    original,
+    getLocalJapaneseReadingWithTokens
+  );
+}
+
+async function buildLyricLineWithReader(
+  time: number,
+  original: string,
+  reader: typeof getJapaneseReadingWithTokens
+): Promise<LyricLine> {
   let reading = original;
   let tokens: TokenLite[] = [];
 
   try {
-    const readingResult = await getJapaneseReadingWithTokens(original);
+    const readingResult = await reader(original);
     reading = readingResult.reading;
     tokens = readingResult.tokens;
 

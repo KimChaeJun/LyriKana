@@ -3,9 +3,18 @@
   "name": "LyriKana",
   "version": "0.1",
   "description": "YouTube Music lyrics and pronunciation helper",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage", "windows"],
+  "action": {
+    "default_title": "LyriKana",
+    "default_popup": "popup/index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "https://music.youtube.com/*",
+    "http://127.0.0.1:17654/*",
+    "https://lrclib.net/*",
     "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev/*"
   ], 
   "content_scripts": [

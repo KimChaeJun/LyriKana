@@ -10,7 +10,9 @@ const readingCache = new Map<string, ReadingResult>();
 
 const FURIGANA_PROXY_URL =
   "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev";
+const ELECTRON_READING_URL = "http://127.0.0.1:17654";
 const YAHOO_TIMEOUT_MS = 2500;
+const YAHOO_FALLBACK_MAX_LENGTH = 42;
 
 export type ReadingResult = {
   reading: string;
@@ -29,6 +31,19 @@ function isKana(text: string): boolean {
 
 function hasKanji(text: string): boolean {
   return /[一-龯々]/.test(text);
+}
+
+function countKanji(text: string): number {
+  const matches = text.match(/[一-龯々]/g);
+  return matches ? matches.length : 0;
+}
+
+function kanaAndAsciiOnly(text: string): string {
+  return katakanaToHiragana(text).replace(/[^ぁ-んーa-zA-Z0-9]/g, "");
+}
+
+function literalPattern(value: string): RegExp {
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 }
 
 function normalizeReadingText(input: string): string {
@@ -70,6 +85,48 @@ function normalizeReadingText(input: string): string {
     .replace(/りゅー/g, "りゅう");
 
   return out;
+}
+
+function applyLyricContextReadingOverrides(
+  original: string,
+  reading: string
+): string {
+  let nextReading = reading;
+
+  const contextualOverrides: Array<{
+    surface: string;
+    reading: string;
+    wrongReadings: string[];
+  }> = [
+    { surface: "解けない", reading: "ほどけない", wrongReadings: ["とけない"] },
+    { surface: "今世", reading: "こんせい", wrongReadings: ["こんよ", "いませ", "こんせ"] },
+    { surface: "愛おしい", reading: "いとおしい", wrongReadings: ["あいおしい"] },
+    { surface: "愛おし", reading: "いとおし", wrongReadings: ["あいおし"] },
+    { surface: "失く", reading: "なく", wrongReadings: ["しつく"] },
+    { surface: "抱きしめ", reading: "だきしめ", wrongReadings: ["いだきしめ"] },
+    { surface: "抱き締め", reading: "だきしめ", wrongReadings: ["いだきしめ"] },
+    { surface: "被って", reading: "かぶって", wrongReadings: ["こうむって"] },
+    { surface: "被る", reading: "かぶる", wrongReadings: ["こうむる"] },
+    { surface: "埃を被って", reading: "ほこりをかぶって", wrongReadings: ["ほこりをこうむって"] },
+  ];
+
+  for (const override of contextualOverrides) {
+    if (!original.includes(override.surface)) continue;
+
+    for (const wrongReading of override.wrongReadings) {
+      nextReading = nextReading.replace(literalPattern(wrongReading), override.reading);
+    }
+  }
+
+  if (
+    /(?:温もり|ぬくもり|光|闇|愛|優しさ|夢|声|風|音|記憶|孤独|幸せ|悲しみ|涙|希望|世界)に包まれ/.test(
+      original
+    )
+  ) {
+    nextReading = nextReading.replace(/くるまれ/g, "つつまれ");
+  }
+
+  return nextReading;
 }
 
 function countHiragana(text: string): number {
@@ -204,7 +261,7 @@ export function getTokenizer() {
   return tokenizerPromise;
 }
 
-function getCounterCompoundReading(
+function getKnownCompoundReading(
   current: TokenLite,
   next: TokenLite | undefined
 ): { reading: string; consumeNext: boolean } | null {
@@ -213,6 +270,37 @@ function getCounterCompoundReading(
   const pair = `${current.surface}${next.surface}`;
 
   const pairMap: Record<string, string> = {
+    今世: "こんせい",
+    来世: "らいせ",
+    前世: "ぜんせ",
+    現世: "げんせ",
+    世界: "せかい",
+    未来: "みらい",
+    過去: "かこ",
+    明日: "あした",
+    今日: "きょう",
+    昨日: "きのう",
+    大人: "おとな",
+    子供: "こども",
+    上手: "じょうず",
+    下手: "へた",
+    本当: "ほんとう",
+    言葉: "ことば",
+    心臓: "しんぞう",
+    心音: "しんおん",
+    瞬間: "しゅんかん",
+    永遠: "えいえん",
+    運命: "うんめい",
+    約束: "やくそく",
+    記憶: "きおく",
+    孤独: "こどく",
+    奇跡: "きせき",
+    涙声: "なみだごえ",
+    物語: "ものがたり",
+    何度: "なんど",
+    何回: "なんかい",
+    何処: "どこ",
+    何故: "なぜ",
     一人: "ひとり",
     二人: "ふたり",
     一回: "いっかい",
@@ -240,10 +328,10 @@ function buildLocalReadingFromTokens(tokens: TokenLite[]): string {
     const current = tokens[i];
     const next = tokens[i + 1];
 
-    const counterCompound = getCounterCompoundReading(current, next);
-    if (counterCompound) {
-      out.push(counterCompound.reading);
-      if (counterCompound.consumeNext) {
+    const knownCompound = getKnownCompoundReading(current, next);
+    if (knownCompound) {
+      out.push(knownCompound.reading);
+      if (knownCompound.consumeNext) {
         i += 1;
       }
       continue;
@@ -296,7 +384,7 @@ function shouldTryYahooFallback(
   }
 
   // 긴 줄까지 전부 Yahoo fallback 보내면 체감속도가 너무 느려짐
-  if (original.length > 24) {
+  if (original.length > YAHOO_FALLBACK_MAX_LENGTH) {
     return {
       shouldTry: false,
       reasons: ["skip yahoo fallback for long line"],
@@ -311,7 +399,97 @@ function shouldTryYahooFallback(
     };
   }
 
+  const kanjiCount = countKanji(original);
+  const hasMixedScript =
+    /[ぁ-んァ-ヶー]/.test(original) && hasKanji(original);
+
+  if (kanjiCount > 0 && (hasMixedScript || kanjiCount >= 2)) {
+    return {
+      shouldTry: true,
+      reasons: ["kanji lyric line uses Yahoo comparison for contextual reading"],
+    };
+  }
+
   return { shouldTry: false, reasons: [] };
+}
+
+async function postElectronReading<T>(
+  path: string,
+  payload: unknown
+): Promise<T | null> {
+  try {
+    const response = await fetch(`${ELECTRON_READING_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as { ok?: boolean; data?: T };
+    return data.ok ? data.data ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getSudachiReading(text: string): Promise<string | null> {
+  const result = await postElectronReading<{ reading?: string }>(
+    "/reading/sudachi/analyze",
+    { text, splitMode: "C" }
+  );
+  const reading = normalizeReadingText(result?.reading ?? "");
+
+  if (reading) {
+    console.log("[LyriKana] Sudachi reading:", {
+      original: text,
+      reading,
+    });
+  }
+
+  return reading || null;
+}
+
+function saveReadingCandidate(
+  original: string,
+  source: string,
+  reading: string,
+  score: number,
+  reasons: string[]
+): void {
+  void postElectronReading("/reading/candidates/save", {
+    original,
+    engineVersion: 2,
+    source,
+    reading,
+    kr: "",
+    jp: "",
+    en: "",
+    score,
+    reasons,
+  });
+}
+
+export async function getLocalJapaneseReadingWithTokens(
+  text: string
+): Promise<ReadingResult> {
+  const normalized = text.trim();
+  if (!normalized) {
+    return { reading: "", tokens: [] };
+  }
+
+  const { tokens, reading } = await tokenizeAndBuildLocalReading(normalized);
+  const finalReading = applyLyricContextReadingOverrides(
+    normalized,
+    normalizeReadingText(reading)
+  );
+
+  return {
+    reading: finalReading,
+    tokens,
+  };
 }
 
 function isSevereYahooShrink(localReading: string, yahooReading: string): boolean {
@@ -413,6 +591,26 @@ function fixesNumericCounterCase(localReading: string, yahooReading: string): bo
   );
 }
 
+function hasAdjacentSingleKanjiNounSplit(tokens: TokenLite[]): boolean {
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const current = tokens[index];
+    const next = tokens[index + 1];
+    const afterNext = tokens[index + 2];
+
+    const currentIsSingleKanjiNoun =
+      current.surface.length === 1 && hasKanji(current.surface) && current.pos === "名詞";
+    const nextIsSingleKanjiNoun =
+      next.surface.length === 1 && hasKanji(next.surface) && next.pos === "名詞";
+    const followedByParticleOrEnd = !afterNext || afterNext.pos === "助詞";
+
+    if (currentIsSingleKanjiNoun && nextIsSingleKanjiNoun && followedByParticleOrEnd) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function shouldPreferYahooReading(
   original: string,
   localReading: string,
@@ -431,6 +629,16 @@ function shouldPreferYahooReading(
   if (isSevereYahooShrink(local, yahoo)) return false;
   if (breaksAiSouCase(original, local, yahoo)) return false;
   if (breaksParticleWaCase(tokens, local, yahoo)) return false;
+  if (hasAdjacentSingleKanjiNounSplit(tokens) && local !== yahoo) return true;
+
+  if (hasKanji(original) && local !== yahoo) {
+    const localShape = kanaAndAsciiOnly(local);
+    const yahooShape = kanaAndAsciiOnly(yahoo);
+
+    if (yahooShape.length >= Math.max(1, localShape.length - 1)) {
+      return true;
+    }
+  }
 
   return false;
 }
@@ -471,19 +679,49 @@ export async function getJapaneseReadingWithTokens(
       reasons: fallbackDecision.reasons,
     });
 
+    const sudachiReading = await getSudachiReading(normalized);
+
+    if (sudachiReading) {
+      const useSudachi = shouldPreferYahooReading(
+        normalized,
+        localReading,
+        sudachiReading,
+        tokens
+      );
+
+      console.log("[LyriKana] Sudachi comparison:", {
+        original: normalized,
+        localReading,
+        sudachiReading,
+        useSudachi,
+      });
+
+      saveReadingCandidate(
+        normalized,
+        "sudachi",
+        sudachiReading,
+        useSudachi ? 10 : 0.5,
+        fallbackDecision.reasons
+      );
+
+      if (useSudachi) {
+        finalReading = sudachiReading;
+      }
+    }
+
     const yahooReading = await getYahooReading(normalized);
 
     if (yahooReading) {
       const useYahoo = shouldPreferYahooReading(
         normalized,
-        localReading,
+        finalReading,
         yahooReading,
         tokens
       );
 
       console.log("[LyriKana] fallback comparison:", {
         original: normalized,
-        localReading,
+        currentReading: finalReading,
         yahooReading,
         useYahoo,
       });
@@ -492,7 +730,10 @@ export async function getJapaneseReadingWithTokens(
     }
   }
 
-  finalReading = normalizeReadingText(finalReading);
+  finalReading = applyLyricContextReadingOverrides(
+    normalized,
+    normalizeReadingText(finalReading)
+  );
 
   const result = {
     reading: finalReading,

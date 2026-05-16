@@ -1,0 +1,12 @@
+{
+  "inputPath": "data\\corrections.json",
+  "trainOutputPath": "data\\lyrikana-training.jsonl",
+  "validationOutputPath": "data\\lyrikana-validation.jsonl",
+  "totalLogs": 1,
+  "acceptedLogs": 1,
+  "rejectedLogs": [],
+  "duplicateExamplesRemoved": 0,
+  "trainExamples": 1,
+  "validationExamples": 0,
+  "validationRatio": 0.1
+}

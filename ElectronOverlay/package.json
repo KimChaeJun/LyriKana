@@ -1,0 +1,14 @@
+{
+  "name": "lyrikana-electron-overlay",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "setup:sudachi": "python -m pip install SudachiPy sudachidict_core"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7"
+  }
+}

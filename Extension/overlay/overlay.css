@@ -1,0 +1,113 @@
+:root {
+  --original-min-size: 24px;
+  --reading-min-size: 18px;
+  --translation-min-size: 17px;
+  --overlay-opacity: 0.74;
+  --card-start-rgb: 20 24 36;
+  --card-end-rgb: 8 10 16;
+  --original-color: #ffffff;
+  --reading-color: #c7ddff;
+  --translation-color: #f5d9a8;
+  --next-color: #a8b0c3;
+  --next-border-color: rgba(255, 255, 255, 0.12);
+  color: white;
+  background: #101218;
+  font-family: Pretendard, "Noto Sans CJK KR", "Noto Sans KR", "Noto Sans JP",
+    "Yu Gothic UI", "Malgun Gothic", "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: grid;
+  min-height: 100vh;
+  margin: 0;
+  place-items: center;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(23, 28, 39, 0.95), rgba(7, 9, 13, 0.96)),
+    #101218;
+}
+
+#overlay {
+  width: min(860px, calc(100vw - 32px));
+  min-height: 178px;
+  padding: 22px 30px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background:
+    linear-gradient(
+      135deg,
+      rgb(var(--card-start-rgb) / var(--overlay-opacity)),
+      rgb(var(--card-end-rgb) / var(--overlay-opacity))
+    ),
+    transparent;
+  text-align: center;
+  white-space: pre-wrap;
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  user-select: none;
+}
+
+#overlay[data-theme="light"] {
+  --card-start-rgb: 250 252 255;
+  --card-end-rgb: 232 237 247;
+  --original-color: #111827;
+  --reading-color: #1d4ed8;
+  --translation-color: #9a5b00;
+  --next-color: #5f6b7d;
+  --next-border-color: rgba(20, 24, 36, 0.14);
+}
+
+#original {
+  margin-bottom: 8px;
+  color: var(--original-color);
+  font-size: clamp(
+    var(--original-min-size),
+    min(5vw, 17vh),
+    calc(var(--original-min-size) * 1.55)
+  );
+  font-weight: 700;
+  line-height: 1.45;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.36);
+}
+
+#reading {
+  margin-bottom: 6px;
+  color: var(--reading-color);
+  opacity: 0.96;
+  font-size: clamp(
+    var(--reading-min-size),
+    min(3.7vw, 12vh),
+    calc(var(--reading-min-size) * 1.5)
+  );
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+#translation {
+  margin-bottom: 14px;
+  color: var(--translation-color);
+  opacity: 0.92;
+  font-size: clamp(
+    var(--translation-min-size),
+    min(3.4vw, 11vh),
+    calc(var(--translation-min-size) * 1.5)
+  );
+  line-height: 1.45;
+}
+
+#next {
+  display: inline-block;
+  max-width: 100%;
+  padding-top: 10px;
+  border-top: 1px solid var(--next-border-color);
+  color: var(--next-color);
+  opacity: 0.82;
+  font-size: 16px;
+  line-height: 1.45;
+}

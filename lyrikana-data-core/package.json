@@ -1,0 +1,19 @@
+{
+  "name": "lyrikana-data-core",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node --project tsconfig.node.json src/sample.ts",
+    "generate:jsonl": "ts-node --project tsconfig.node.json src/scripts/generateJsonl.ts",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}

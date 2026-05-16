@@ -168,37 +168,10 @@ const KANA_TO_EN: Record<string, string> = {
   ー: "-",
 };
 
-const YOON_NORMALIZE_MAP: Record<string, string> = {
-  きや: "きゃ", きゆ: "きゅ", きよ: "きょ",
-  ぎや: "ぎゃ", ぎゆ: "ぎゅ", ぎよ: "ぎょ",
-
-  しや: "しゃ", しゆ: "しゅ", しよ: "しょ",
-  じや: "じゃ", じゆ: "じゅ", じよ: "じょ",
-  ぢや: "ぢゃ", ぢゆ: "ぢゅ", ぢよ: "ぢょ",
-
-  ちや: "ちゃ", ちゆ: "ちゅ", ちよ: "ちょ",
-
-  にや: "にゃ", にゆ: "にゅ", によ: "にょ",
-  ひや: "ひゃ", ひゆ: "ひゅ", ひよ: "ひょ",
-  びや: "びゃ", びゆ: "びゅ", びよ: "びょ",
-  ぴや: "ぴゃ", ぴゆ: "ぴゅ", ぴよ: "ぴょ",
-
-  みや: "みゃ", みゆ: "みゅ", みよ: "みょ",
-  りや: "りゃ", りゆ: "りゅ", りよ: "りょ",
-};
-
 function katakanaToHiragana(input: string): string {
   return input.replace(/[\u30a1-\u30f6]/g, (char) =>
     String.fromCharCode(char.charCodeAt(0) - 0x60)
   );
-}
-
-function normalizeYoonKana(input: string): string {
-  let out = input;
-  for (const [from, to] of Object.entries(YOON_NORMALIZE_MAP)) {
-    out = out.replace(new RegExp(from, "g"), to);
-  }
-  return out;
 }
 
 function isSmallTsu(char: string): boolean {
@@ -356,37 +329,7 @@ function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): voi
 }
 
 function postProcessKR(text: string): string {
-  return text
-    .replace(/기야/g, "갸")
-    .replace(/기유/g, "규")
-    .replace(/기요/g, "교")
-    .replace(/시야/g, "샤")
-    .replace(/시유/g, "슈")
-    .replace(/시요/g, "쇼")
-    .replace(/지야/g, "쟈")
-    .replace(/지유/g, "쥬")
-    .replace(/지요/g, "죠")
-    .replace(/치야/g, "차")
-    .replace(/치유/g, "추")
-    .replace(/치요/g, "초")
-    .replace(/니야/g, "냐")
-    .replace(/니유/g, "뉴")
-    .replace(/니요/g, "뇨")
-    .replace(/히야/g, "햐")
-    .replace(/히유/g, "휴")
-    .replace(/히요/g, "효")
-    .replace(/비야/g, "뱌")
-    .replace(/비유/g, "뷰")
-    .replace(/비요/g, "뵤")
-    .replace(/피야/g, "퍄")
-    .replace(/피유/g, "퓨")
-    .replace(/피요/g, "표")
-    .replace(/미야/g, "먀")
-    .replace(/미유/g, "뮤")
-    .replace(/미요/g, "묘")
-    .replace(/리야/g, "랴")
-    .replace(/리유/g, "류")
-    .replace(/리요/g, "료");
+  return text.replace(/ああ/g, "아아");
 }
 
 function isParticleHaToken(token: TokenLite | undefined): boolean {
@@ -439,7 +382,7 @@ function applyParticleWaRuleFromTokens(
 
 function convertKana(reading: string, mode: Mode): string {
   const hiraReading = katakanaToHiragana(reading);
-  const normalizedReading = normalizeYoonKana(hiraReading);
+  const normalizedReading = hiraReading;
 
   const tokens: string[] = [];
   let i = 0;

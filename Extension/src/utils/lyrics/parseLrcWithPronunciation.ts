@@ -1,4 +1,8 @@
-import { buildLyricLine, type LyricLine } from "../pronunciation/lineBuilder";
+import {
+  buildFastLyricLine,
+  buildLyricLine,
+  type LyricLine,
+} from "../pronunciation/lineBuilder";
 
 export type BaseLyricLine = {
   time: number;
@@ -11,6 +15,8 @@ export type BaseLyricLine = {
 
 export type BackgroundBuildOptions = {
   concurrency?: number;
+  buildMode?: "fast" | "precise";
+  indices?: number[];
   shouldStop?: () => boolean;
   onLine?: (index: number, line: LyricLine) => void;
   onError?: (index: number, original: string, error: unknown) => void;
@@ -84,12 +90,18 @@ export async function enrichLyricsInBackground(
 ): Promise<void> {
   const {
     concurrency = 3,
+    buildMode = "precise",
+    indices,
     shouldStop = () => false,
     onLine,
     onError,
   } = options;
 
   let cursor = 0;
+  const order = indices?.length
+    ? [...new Set(indices)].filter((index) => index >= 0 && index < baseLines.length)
+    : baseLines.map((_line, index) => index);
+  const build = buildMode === "fast" ? buildFastLyricLine : buildLyricLine;
 
   const worker = async () => {
     while (true) {
@@ -98,12 +110,13 @@ export async function enrichLyricsInBackground(
       const index = cursor;
       cursor += 1;
 
-      if (index >= baseLines.length) return;
+      if (index >= order.length) return;
 
-      const seed = baseLines[index];
+      const lineIndex = order[index];
+      const seed = baseLines[lineIndex];
 
       try {
-        const built = await buildLyricLine(seed.time, seed.original);
+        const built = await build(seed.time, seed.original);
         if (shouldStop()) return;
 
         const fixedLine = applyParsedLineSafetyFixes({
@@ -112,22 +125,22 @@ export async function enrichLyricsInBackground(
         });
 
         console.log("[LyriKana] enriched line:", {
-          index,
+          index: lineIndex,
           time: fixedLine.time,
           original: fixedLine.original,
           reading: fixedLine.reading,
           kr: fixedLine.kr,
         });
 
-        onLine?.(index, fixedLine);
+        onLine?.(lineIndex, fixedLine);
       } catch (error) {
         console.error("[LyriKana] buildLyricLine failed:", {
-          index,
+          index: lineIndex,
           original: seed.original,
           error,
         });
 
-        onError?.(index, seed.original, error);
+        onError?.(lineIndex, seed.original, error);
       }
     }
   };

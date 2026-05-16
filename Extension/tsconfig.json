@@ -16,7 +16,9 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",
-    "src/**/*.d.ts"
+    "src/**/*.d.ts",
+    "popup/**/*.ts",
+    "overlay/**/*.ts"
   ],
   "exclude": [
     "node_modules",

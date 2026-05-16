@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LyriKana Overlay</title>
+    <link rel="stylesheet" href="./overlay.css" />
+  </head>
+  <body>
+    <main id="shell">
+      <header id="toolbar">
+        <span id="status-dot"></span>
+        <span id="song">LyriKana</span>
+        <span id="mode-hint" title="Toggle click-through with Ctrl+Alt+L">
+          Click-through OFF
+        </span>
+        <button id="minimize" type="button" title="Minimize">−</button>
+        <button id="close" type="button" title="Close">×</button>
+      </header>
+      <section id="lyrics">
+        <div id="original">LyriKana loading...</div>
+        <div id="reading"></div>
+        <div id="translation"></div>
+        <div id="next"></div>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

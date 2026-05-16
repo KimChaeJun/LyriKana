@@ -1,0 +1,18 @@
+[
+  {
+    "id": "sample-reading-1",
+    "type": "reading",
+    "song": {
+      "title": "Sample Song",
+      "artist": "Mrs. GREEN APPLE",
+      "album": "Attitude",
+      "duration": 321
+    },
+    "lineIndex": 12,
+    "originalText": "Original lyric line",
+    "beforeValue": "Before reading",
+    "afterValue": "After reading",
+    "source": "manual_user_edit",
+    "createdAt": "2026-05-15T08:00:00.000Z"
+  }
+]
