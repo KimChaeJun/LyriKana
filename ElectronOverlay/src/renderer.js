@@ -7,6 +7,9 @@ const next = document.querySelector("#next");
 const closeButton = document.querySelector("#close");
 const minimizeButton = document.querySelector("#minimize");
 const modeHint = document.querySelector("#mode-hint");
+const previousTrackButton = document.querySelector("#previous-track");
+const playPauseButton = document.querySelector("#play-pause");
+const nextTrackButton = document.querySelector("#next-track");
 
 let settings = {
   enabled: true,
@@ -20,6 +23,7 @@ let settings = {
   themeMode: "system",
 };
 let clickThrough = false;
+let isPlaying = false;
 
 const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -53,7 +57,7 @@ function setClickThroughState(enabled) {
 function applySettings(nextSettings = {}) {
   settings = { ...settings, ...nextSettings };
 
-  shell.style.display = settings.enabled ? "block" : "none";
+  shell.style.display = settings.enabled ? "grid" : "none";
   applyTheme();
 
   document.documentElement.style.setProperty(
@@ -74,8 +78,22 @@ function applySettings(nextSettings = {}) {
   next.style.display = settings.showNextLine ? "inline-block" : "none";
 }
 
+function updatePlayPauseButton(nextIsPlaying) {
+  isPlaying = Boolean(nextIsPlaying);
+  playPauseButton.textContent = isPlaying ? "Ⅱ" : "▶";
+  playPauseButton.title = isPlaying ? "Pause" : "Play";
+  playPauseButton.setAttribute(
+    "aria-label",
+    isPlaying ? "Pause track" : "Play track"
+  );
+  document.body.classList.toggle("is-playing", isPlaying);
+}
+
 function render(payload) {
   applySettings(payload.settings);
+  if (typeof payload.isPlaying === "boolean") {
+    updatePlayPauseButton(payload.isPlaying);
+  }
 
   song.textContent = payload.songLabel || "LyriKana";
   original.textContent = payload.original || "";
@@ -92,9 +110,25 @@ minimizeButton.addEventListener("click", () => {
   window.lyrikana.minimize();
 });
 
+previousTrackButton.addEventListener("click", () => {
+  window.lyrikana.playerCommand("previous");
+});
+
+playPauseButton.addEventListener("click", () => {
+  window.lyrikana.playerCommand("play-pause");
+});
+
+nextTrackButton.addEventListener("click", () => {
+  window.lyrikana.playerCommand("next");
+});
+
 window.lyrikana.onOverlayUpdate(render);
 window.lyrikana.onSettingsUpdate(applySettings);
 window.lyrikana.onClickThroughUpdate(setClickThroughState);
+window.lyrikana.onPlaybackUpdate((payload) => {
+  updatePlayPauseButton(payload?.isPlaying);
+});
 systemDarkQuery.addEventListener("change", applyTheme);
 applySettings();
 setClickThroughState(false);
+updatePlayPauseButton(false);

@@ -3,6 +3,7 @@ export interface LyriKanaSettings {
   showReading: boolean;
   showTranslation: boolean;
   showNextLine: boolean;
+  showInstrumental: boolean;
   originalFontSize: number;
   readingFontSize: number;
   translationFontSize: number;
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: LyriKanaSettings = {
   showReading: true,
   showTranslation: true,
   showNextLine: true,
+  showInstrumental: false,
   originalFontSize: 24,
   readingFontSize: 18,
   translationFontSize: 17,
@@ -40,6 +42,8 @@ function normalizeSettings(value: unknown): LyriKanaSettings {
     showReading: candidate.showReading ?? DEFAULT_SETTINGS.showReading,
     showTranslation: candidate.showTranslation ?? DEFAULT_SETTINGS.showTranslation,
     showNextLine: candidate.showNextLine ?? DEFAULT_SETTINGS.showNextLine,
+    showInstrumental:
+      candidate.showInstrumental ?? DEFAULT_SETTINGS.showInstrumental,
     originalFontSize:
       candidate.originalFontSize ?? DEFAULT_SETTINGS.originalFontSize,
     readingFontSize: candidate.readingFontSize ?? DEFAULT_SETTINGS.readingFontSize,

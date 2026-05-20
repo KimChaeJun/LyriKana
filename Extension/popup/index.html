@@ -9,72 +9,109 @@
   <body>
     <main class="popup-shell">
       <header class="popup-header">
-        <div>
-          <h1>LyriKana</h1>
-          <p>YouTube Music overlay settings</p>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">LK</div>
+          <div>
+            <h1>LyriKana</h1>
+            <p>YouTube Music overlay</p>
+          </div>
         </div>
-        <label class="switch">
-          <input id="enabled" type="checkbox" />
-          <span></span>
-        </label>
+        <div class="master-toggle">
+          <span>Overlay</span>
+          <label class="switch" aria-label="Enable LyriKana overlay">
+            <input id="enabled" type="checkbox" />
+            <span></span>
+          </label>
+        </div>
       </header>
 
-      <section class="control-group">
-        <label>
-          <input id="showReading" type="checkbox" />
-          <span>Show reading</span>
-        </label>
-        <label>
-          <input id="showTranslation" type="checkbox" />
-          <span>Show Korean line</span>
-        </label>
-        <label>
-          <input id="showNextLine" type="checkbox" />
-          <span>Show next lyric</span>
-        </label>
+      <section class="settings-card">
+        <div class="section-heading">
+          <h2>표시 항목</h2>
+          <p>오버레이에 보여줄 가사 정보를 고릅니다.</p>
+        </div>
+        <div class="control-group">
+          <label class="check-row">
+            <input id="showReading" type="checkbox" />
+            <span>일본어 발음</span>
+          </label>
+          <label class="check-row">
+            <input id="showTranslation" type="checkbox" />
+            <span>한국어 가사</span>
+          </label>
+          <label class="check-row">
+            <input id="showNextLine" type="checkbox" />
+            <span>다음 가사 미리보기</span>
+          </label>
+          <label class="check-row">
+            <input id="showInstrumental" type="checkbox" />
+            <span>전주/간주 표시</span>
+          </label>
+        </div>
       </section>
 
-      <section class="control-grid">
-        <label>
-          <span>Theme</span>
-          <select id="themeMode">
-            <option value="system">Chrome setting</option>
-            <option value="dark">Dark mode</option>
-            <option value="light">White mode</option>
-          </select>
-        </label>
-        <label>
-          <span>Original min size</span>
-          <input id="originalFontSize" type="number" min="16" max="42" />
-        </label>
-        <label>
-          <span>Reading min size</span>
-          <input id="readingFontSize" type="number" min="12" max="32" />
-        </label>
-        <label>
-          <span>Korean min size</span>
-          <input id="translationFontSize" type="number" min="12" max="32" />
-        </label>
-        <label>
-          <span>Bottom offset</span>
-          <input id="bottomOffset" type="number" min="40" max="320" />
-        </label>
+      <section class="settings-card">
+        <div class="section-heading">
+          <h2>화면 스타일</h2>
+          <p>카드 색상과 글씨 크기의 기준값입니다.</p>
+        </div>
+        <fieldset class="theme-field">
+          <legend>테마</legend>
+          <div class="theme-options" role="radiogroup" aria-label="Overlay theme">
+            <label>
+              <input type="radio" name="themeMode" value="system" />
+              <span>Chrome</span>
+            </label>
+            <label>
+              <input type="radio" name="themeMode" value="dark" />
+              <span>Dark</span>
+            </label>
+            <label>
+              <input type="radio" name="themeMode" value="light" />
+              <span>White</span>
+            </label>
+          </div>
+        </fieldset>
+        <div class="control-grid">
+          <label class="field-row">
+            <span>원문 최소 크기</span>
+            <input id="originalFontSize" type="number" min="16" max="42" />
+          </label>
+          <label class="field-row">
+            <span>발음 최소 크기</span>
+            <input id="readingFontSize" type="number" min="12" max="32" />
+          </label>
+          <label class="field-row">
+            <span>한국어 최소 크기</span>
+            <input id="translationFontSize" type="number" min="12" max="32" />
+          </label>
+          <label class="field-row">
+            <span>하단 위치</span>
+            <input id="bottomOffset" type="number" min="40" max="320" />
+          </label>
+        </div>
       </section>
 
-      <section class="range-group">
-        <label>
-          <span>Overlay opacity</span>
-          <output id="overlayOpacityValue"></output>
-          <input id="overlayOpacity" type="range" min="0.25" max="1" step="0.01" />
-        </label>
-        <label>
-          <span>Preview lead time</span>
-          <output id="previewLeadTimeValue"></output>
-          <input id="previewLeadTime" type="range" min="0" max="1.5" step="0.1" />
-        </label>
+      <section class="settings-card">
+        <div class="section-heading">
+          <h2>재생 타이밍</h2>
+          <p>가사 카드의 투명도와 미리보기 속도입니다.</p>
+        </div>
+        <div class="range-group">
+          <label class="range-row">
+            <span>오버레이 투명도</span>
+            <output id="overlayOpacityValue"></output>
+            <input id="overlayOpacity" type="range" min="0.25" max="1" step="0.01" />
+          </label>
+          <label class="range-row">
+            <span>미리보기 시간</span>
+            <output id="previewLeadTimeValue"></output>
+            <input id="previewLeadTime" type="range" min="-1.5" max="1.5" step="0.1" />
+          </label>
+        </div>
       </section>
 
-      <footer>
+      <footer class="popup-footer">
         <button id="reset" type="button">Reset</button>
         <span id="status" role="status"></span>
       </footer>

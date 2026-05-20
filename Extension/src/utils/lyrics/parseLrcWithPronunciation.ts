@@ -4,6 +4,8 @@ import {
   type LyricLine,
 } from "../pronunciation/lineBuilder";
 
+const DEBUG_READING_LOGS = false;
+
 export type BaseLyricLine = {
   time: number;
   original: string;
@@ -11,6 +13,10 @@ export type BaseLyricLine = {
   kr: string;
   jp: string;
   en: string;
+};
+
+export type LrcSyncMarker = {
+  time: number;
 };
 
 export type BackgroundBuildOptions = {
@@ -84,6 +90,25 @@ export function parseLrcBase(lrc: string): BaseLyricLine[] {
     });
 }
 
+export function parseLrcSyncMarkers(lrc: string): LrcSyncMarker[] {
+  return lrc
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const match = line.match(/\[(\d{2}):(\d{2}(?:\.\d+)?)\]\s*(.*)/);
+      if (!match) return [];
+
+      const text = match[3].trim();
+      if (text) return [];
+
+      const minutes = parseInt(match[1], 10);
+      const seconds = parseFloat(match[2]);
+
+      return [{ time: minutes * 60 + seconds }];
+    });
+}
+
 export async function enrichLyricsInBackground(
   baseLines: BaseLyricLine[],
   options: BackgroundBuildOptions = {}
@@ -124,21 +149,25 @@ export async function enrichLyricsInBackground(
           original: seed.original,
         });
 
-        console.log("[LyriKana] enriched line:", {
-          index: lineIndex,
-          time: fixedLine.time,
-          original: fixedLine.original,
-          reading: fixedLine.reading,
-          kr: fixedLine.kr,
-        });
+        if (DEBUG_READING_LOGS) {
+          console.log("[LyriKana] enriched line:", {
+            index: lineIndex,
+            time: fixedLine.time,
+            original: fixedLine.original,
+            reading: fixedLine.reading,
+            kr: fixedLine.kr,
+          });
+        }
 
         onLine?.(lineIndex, fixedLine);
       } catch (error) {
-        console.error("[LyriKana] buildLyricLine failed:", {
-          index: lineIndex,
-          original: seed.original,
-          error,
-        });
+        if (DEBUG_READING_LOGS) {
+          console.error("[LyriKana] buildLyricLine failed:", {
+            index: lineIndex,
+            original: seed.original,
+            error,
+          });
+        }
 
         onError?.(lineIndex, seed.original, error);
       }

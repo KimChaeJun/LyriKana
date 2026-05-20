@@ -42,24 +42,26 @@ body {
 }
 
 body[data-theme="light"] {
-  --card-start-rgb: 250 252 255;
-  --card-end-rgb: 232 237 247;
-  --border-color: rgba(20, 24, 36, 0.16);
-  --toolbar-color: #5f6b7d;
-  --button-bg: rgba(20, 24, 36, 0.08);
-  --button-bg-hover: rgba(20, 24, 36, 0.14);
-  --button-color: #263044;
-  --song-color: #5f6b7d;
-  --mode-hint-color: #4b5568;
-  --mode-hint-border-color: rgba(20, 24, 36, 0.14);
-  --original-color: #111827;
-  --reading-color: #1d4ed8;
-  --translation-color: #9a5b00;
-  --next-color: #5f6b7d;
-  --next-border-color: rgba(20, 24, 36, 0.14);
+  --card-start-rgb: 255 255 255;
+  --card-end-rgb: 238 242 248;
+  --border-color: rgba(15, 23, 42, 0.22);
+  --toolbar-color: #334155;
+  --button-bg: rgba(15, 23, 42, 0.1);
+  --button-bg-hover: rgba(15, 23, 42, 0.18);
+  --button-color: #0f172a;
+  --song-color: #1e293b;
+  --mode-hint-color: #1e293b;
+  --mode-hint-border-color: rgba(15, 23, 42, 0.2);
+  --original-color: #020617;
+  --reading-color: #0f3ea8;
+  --translation-color: #7c2d12;
+  --next-color: #334155;
+  --next-border-color: rgba(15, 23, 42, 0.2);
 }
 
 #shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -116,6 +118,20 @@ body[data-theme="light"] {
   -webkit-app-region: no-drag;
 }
 
+#player-controls {
+  display: flex;
+  justify-self: center;
+  align-items: center;
+  gap: clamp(5px, 1.8vw, 10px);
+  margin: 0 0 clamp(8px, 3vh, 16px);
+  padding: clamp(4px, 1.3vh, 8px);
+  border: 1px solid var(--mode-hint-border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  -webkit-app-region: no-drag;
+}
+
 button {
   width: 26px;
   height: 24px;
@@ -127,6 +143,25 @@ button {
   -webkit-app-region: no-drag;
 }
 
+#player-controls button {
+  width: clamp(34px, min(9vw, 10vh), 48px);
+  height: clamp(30px, min(7.5vw, 8vh), 42px);
+  border-radius: 999px;
+  font-size: clamp(15px, min(3.8vw, 4vh), 21px);
+  font-weight: 800;
+  line-height: 1;
+}
+
+#play-pause {
+  width: clamp(44px, min(12vw, 12vh), 62px);
+  color: var(--original-color);
+  background: rgb(var(--card-start-rgb) / 0.82);
+}
+
+.is-playing #play-pause {
+  color: var(--translation-color);
+}
+
 button:hover {
   background: var(--button-bg-hover);
 }
@@ -134,9 +169,9 @@ button:hover {
 #lyrics {
   display: grid;
   align-content: center;
-  height: calc(100vh - clamp(30px, 14vh, 36px));
-  padding: clamp(6px, 2.4vh, 12px) clamp(18px, 4vw, 34px)
-    clamp(14px, 5vh, 26px);
+  min-height: 0;
+  padding: clamp(4px, 1.6vh, 10px) clamp(18px, 4vw, 34px)
+    clamp(6px, 2vh, 12px);
   overflow: hidden;
   text-align: center;
   white-space: pre-wrap;
@@ -145,6 +180,7 @@ button:hover {
 
 #original {
   margin-bottom: clamp(4px, 1.8vh, 9px);
+  color: var(--original-color);
   font-size: clamp(
     var(--original-min-size),
     min(5vw, 17vh),
@@ -153,6 +189,10 @@ button:hover {
   font-weight: 800;
   line-height: 1.32;
   text-shadow: 0 2px 14px rgba(0, 0, 0, 0.38);
+}
+
+body[data-theme="light"] #original {
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.7);
 }
 
 #reading {
@@ -204,4 +244,3 @@ button:hover {
   border-color: rgba(255, 209, 102, 0.35);
   color: #ffd166;
 }
-  color: var(--original-color);

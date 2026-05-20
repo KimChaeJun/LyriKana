@@ -18,6 +18,42 @@ const PORT = 17654;
 let overlayWindow = null;
 let server = null;
 let clickThrough = false;
+let playerCommandQueue = [];
+let latestSettings = null;
+
+function enqueuePlayerCommand(command) {
+  const allowedCommands = new Set(["play-pause", "next", "previous"]);
+  if (!allowedCommands.has(command)) return false;
+
+  playerCommandQueue.push({
+    command,
+    createdAt: Date.now(),
+  });
+
+  if (playerCommandQueue.length > 20) {
+    playerCommandQueue = playerCommandQueue.slice(-20);
+  }
+
+  return true;
+}
+
+function drainPlayerCommands() {
+  const commands = playerCommandQueue;
+  playerCommandQueue = [];
+  return commands;
+}
+
+function mergeWithLatestSettings(payload) {
+  if (!latestSettings) return payload;
+
+  return {
+    ...payload,
+    settings: {
+      ...(payload?.settings ?? {}),
+      ...latestSettings,
+    },
+  };
+}
 
 function createOverlayWindow() {
   overlayWindow = new BrowserWindow({
@@ -122,14 +158,41 @@ function startServer() {
       const payload = body ? JSON.parse(body) : {};
 
       if (request.url === "/overlay") {
-        sendToOverlay("overlay:update", payload);
+        sendToOverlay("overlay:update", mergeWithLatestSettings(payload));
         writeJson(response, 200, { ok: true });
         return;
       }
 
       if (request.url === "/settings") {
+        latestSettings = {
+          ...(latestSettings ?? {}),
+          ...payload,
+        };
         sendToOverlay("settings:update", payload);
         writeJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.url === "/playback") {
+        sendToOverlay("playback:update", payload);
+        writeJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.url === "/player/command") {
+        writeJson(response, 200, {
+          ok: enqueuePlayerCommand(payload.command),
+        });
+        return;
+      }
+
+      if (request.url === "/player/commands/poll") {
+        writeJson(response, 200, {
+          ok: true,
+          data: {
+            commands: drainPlayerCommands(),
+          },
+        });
         return;
       }
 
@@ -231,6 +294,10 @@ ipcMain.on("window:minimize", () => {
 
 ipcMain.on("window:toggle-ignore-mouse", (_event, ignoreMouse) => {
   setClickThrough(ignoreMouse);
+});
+
+ipcMain.on("player:command", (_event, command) => {
+  enqueuePlayerCommand(command);
 });
 
 app.on("before-quit", () => {

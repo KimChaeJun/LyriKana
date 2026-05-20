@@ -6,16 +6,26 @@ import {
   savePopupSettings,
 } from "./popupSettings";
 
+const ELECTRON_OVERLAY_URL = "http://127.0.0.1:17654";
+
+type LocalNetworkRequestInit = RequestInit & {
+  targetAddressSpace?: "loopback" | "local" | "private" | "public";
+};
+
 const fields = {
   enabled: document.querySelector<HTMLInputElement>("#enabled"),
   showReading: document.querySelector<HTMLInputElement>("#showReading"),
   showTranslation: document.querySelector<HTMLInputElement>("#showTranslation"),
   showNextLine: document.querySelector<HTMLInputElement>("#showNextLine"),
+  showInstrumental:
+    document.querySelector<HTMLInputElement>("#showInstrumental"),
   originalFontSize: document.querySelector<HTMLInputElement>("#originalFontSize"),
   readingFontSize: document.querySelector<HTMLInputElement>("#readingFontSize"),
   translationFontSize:
     document.querySelector<HTMLInputElement>("#translationFontSize"),
-  themeMode: document.querySelector<HTMLSelectElement>("#themeMode"),
+  themeModes: document.querySelectorAll<HTMLInputElement>(
+    "input[name='themeMode']"
+  ),
   overlayOpacity: document.querySelector<HTMLInputElement>("#overlayOpacity"),
   bottomOffset: document.querySelector<HTMLInputElement>("#bottomOffset"),
   previewLeadTime: document.querySelector<HTMLInputElement>("#previewLeadTime"),
@@ -56,6 +66,8 @@ function render(nextSettings: LyriKanaSettings): void {
     settings.showTranslation;
   requireField(fields.showNextLine, "showNextLine").checked =
     settings.showNextLine;
+  requireField(fields.showInstrumental, "showInstrumental").checked =
+    settings.showInstrumental;
   requireField(fields.originalFontSize, "originalFontSize").value = String(
     settings.originalFontSize
   );
@@ -65,7 +77,9 @@ function render(nextSettings: LyriKanaSettings): void {
   requireField(fields.translationFontSize, "translationFontSize").value = String(
     settings.translationFontSize
   );
-  requireField(fields.themeMode, "themeMode").value = settings.themeMode;
+  fields.themeModes.forEach((field) => {
+    field.checked = field.value === settings.themeMode;
+  });
   requireField(fields.overlayOpacity, "overlayOpacity").value = String(
     settings.overlayOpacity
   );
@@ -81,18 +95,36 @@ function render(nextSettings: LyriKanaSettings): void {
     `${settings.previewLeadTime.toFixed(1)}s`;
 }
 
+function postSettingsToElectron(nextSettings: LyriKanaSettings): void {
+  fetch(`${ELECTRON_OVERLAY_URL}/settings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(nextSettings),
+    targetAddressSpace: "loopback",
+  } as LocalNetworkRequestInit).catch(() => {
+    // Electron companion may be closed; persisted settings still apply later.
+  });
+}
+
 async function updateSettings(patch: Partial<LyriKanaSettings>): Promise<void> {
   const nextSettings = { ...settings, ...patch };
   render(nextSettings);
+  postSettingsToElectron(nextSettings);
   await savePopupSettings(nextSettings);
-  updateStatus("Saved");
+  updateStatus("저장됨");
 }
 
 function bindCheckbox(
   field: HTMLInputElement | null,
   key: keyof Pick<
     LyriKanaSettings,
-    "enabled" | "showReading" | "showTranslation" | "showNextLine"
+    | "enabled"
+    | "showReading"
+    | "showTranslation"
+    | "showNextLine"
+    | "showInstrumental"
   >
 ): void {
   requireField(field, key).addEventListener("change", (event) => {
@@ -124,13 +156,20 @@ function bindRange(
   });
 }
 
-function bindSelect(
-  field: HTMLSelectElement | null,
-  key: keyof Pick<LyriKanaSettings, "themeMode">
-): void {
-  requireField(field, key).addEventListener("change", (event) => {
-    const target = event.currentTarget as HTMLSelectElement;
-    void updateSettings({ [key]: target.value as LyriKanaSettings[typeof key] });
+function bindThemeModes(fields: NodeListOf<HTMLInputElement>): void {
+  if (fields.length === 0) {
+    throw new Error("Missing popup field: themeMode");
+  }
+
+  fields.forEach((field) => {
+    field.addEventListener("change", (event) => {
+      const target = event.currentTarget as HTMLInputElement;
+      if (!target.checked) return;
+
+      void updateSettings({
+        themeMode: target.value as LyriKanaSettings["themeMode"],
+      });
+    });
   });
 }
 
@@ -141,17 +180,20 @@ async function init(): Promise<void> {
   bindCheckbox(fields.showReading, "showReading");
   bindCheckbox(fields.showTranslation, "showTranslation");
   bindCheckbox(fields.showNextLine, "showNextLine");
+  bindCheckbox(fields.showInstrumental, "showInstrumental");
   bindNumber(fields.originalFontSize, "originalFontSize");
   bindNumber(fields.readingFontSize, "readingFontSize");
   bindNumber(fields.translationFontSize, "translationFontSize");
-  bindSelect(fields.themeMode, "themeMode");
+  bindThemeModes(fields.themeModes);
   bindNumber(fields.bottomOffset, "bottomOffset");
   bindRange(fields.overlayOpacity, "overlayOpacity");
   bindRange(fields.previewLeadTime, "previewLeadTime");
 
   requireField(fields.reset, "reset").addEventListener("click", async () => {
-    render(await resetPopupSettings());
-    updateStatus("Reset");
+    const nextSettings = await resetPopupSettings();
+    render(nextSettings);
+    postSettingsToElectron(nextSettings);
+    updateStatus("초기화됨");
   });
 }
 

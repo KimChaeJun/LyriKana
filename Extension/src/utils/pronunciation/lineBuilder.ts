@@ -5,6 +5,8 @@ import {
 import { buildPronunciation } from "./converters";
 import type { TokenLite } from "./specialReadingRules";
 
+const DEBUG_READING_LOGS = false;
+
 export type LyricLine = {
   time: number;
   original: string;
@@ -45,13 +47,17 @@ async function buildLyricLineWithReader(
     reading = readingResult.reading;
     tokens = readingResult.tokens;
 
-    console.log("[LyriKana] reading:", {
-      original,
-      reading,
-      tokens,
-    });
+    if (DEBUG_READING_LOGS) {
+      console.log("[LyriKana] reading:", {
+        original,
+        reading,
+        tokens,
+      });
+    }
   } catch (err) {
-    console.error("[LyriKana] reading fallback:", err);
+    if (DEBUG_READING_LOGS) {
+      console.error("[LyriKana] reading fallback:", err);
+    }
     reading = original;
     tokens = [];
   }

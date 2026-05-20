@@ -28,8 +28,11 @@ const DIGRAPH_TO_KR: Record<string, string> = {
   りゃ: "랴", りゅ: "류", りょ: "료",
 
   ふぁ: "화", ふぃ: "휘", ふぇ: "훼", ふぉ: "호",
+  つぁ: "차", つぃ: "치", つぇ: "체", つぉ: "초",
+  うぃ: "위", うぇ: "웨", うぉ: "워",
+  ゔぁ: "바", ゔぃ: "비", ゔぇ: "베", ゔぉ: "보",
   てぃ: "티", でぃ: "디",
-  とぅ: "투", どぅ: "두",
+  とぅ: "투", どぅ: "두", てゅ: "튜", でゅ: "듀",
   しぇ: "셰", じぇ: "제", ちぇ: "체",
 };
 
@@ -52,8 +55,11 @@ const DIGRAPH_TO_JP: Record<string, string> = {
   りゃ: "랴", りゅ: "류", りょ: "료",
 
   ふぁ: "화", ふぃ: "휘", ふぇ: "훼", ふぉ: "호",
+  つぁ: "츠아", つぃ: "츠이", つぇ: "츠에", つぉ: "츠오",
+  うぃ: "위", うぇ: "웨", うぉ: "워",
+  ゔぁ: "바", ゔぃ: "비", ゔぇ: "베", ゔぉ: "보",
   てぃ: "티", でぃ: "디",
-  とぅ: "투", どぅ: "두",
+  とぅ: "투", どぅ: "두", てゅ: "튜", でゅ: "듀",
   しぇ: "셰", じぇ: "제", ちぇ: "체",
 };
 
@@ -76,8 +82,11 @@ const DIGRAPH_TO_EN: Record<string, string> = {
   りゃ: "rya", りゅ: "ryu", りょ: "ryo",
 
   ふぁ: "fa", ふぃ: "fi", ふぇ: "fe", ふぉ: "fo",
+  つぁ: "tsa", つぃ: "tsi", つぇ: "tse", つぉ: "tso",
+  うぃ: "wi", うぇ: "we", うぉ: "wo",
+  ゔぁ: "va", ゔぃ: "vi", ゔぇ: "ve", ゔぉ: "vo",
   てぃ: "ti", でぃ: "di",
-  とぅ: "tu", どぅ: "du",
+  とぅ: "tu", どぅ: "du", てゅ: "tyu", でゅ: "dyu",
   しぇ: "she", じぇ: "je", ちぇ: "che",
 };
 
@@ -352,33 +361,35 @@ function applyParticleWaRuleFromTokens(
   return kr;
 }
 
-// function applyParticleWaRuleFromOriginal(
-//   original: string | undefined,
-//   reading: string,
-//   kr: string
-// ): string {
-//   if (!original) return kr;
+function applyParticleWaRuleFromOriginal(
+  kr: string,
+  original?: string
+): string {
+  if (!kr || !original) return kr;
 
-//   const trimmedOriginal = original.trim();
+  let nextKr = kr;
 
-//   if (trimmedOriginal.endsWith("は") && reading.endsWith("は") && kr.endsWith("하")) {
-//     return kr.slice(0, -1) + "와";
-//   }
+  if (original.includes("には")) {
+    nextKr = nextKr.replace(/니하/g, "니와");
+  }
+  if (original.includes("では")) {
+    nextKr = nextKr.replace(/데하/g, "데와");
+  }
+  if (original.includes("とは")) {
+    nextKr = nextKr.replace(/토하/g, "토와");
+  }
+  if (original.includes("しは")) {
+    nextKr = nextKr.replace(/시하/g, "시와");
+  }
+  if (original.includes("へは")) {
+    nextKr = nextKr.replace(/에하/g, "에와").replace(/헤하/g, "헤와");
+  }
+  if (original.trim().endsWith("は") && nextKr.endsWith("하")) {
+    nextKr = nextKr.slice(0, -1) + "와";
+  }
 
-//   if (trimmedOriginal.endsWith("では") && kr.endsWith("데하")) {
-//     return kr.slice(0, -2) + "데와";
-//   }
-
-//   if (trimmedOriginal.endsWith("とは") && kr.endsWith("토하")) {
-//     return kr.slice(0, -2) + "토와";
-//   }
-
-//   if (trimmedOriginal.endsWith("には") && kr.endsWith("니하")) {
-//     return kr.slice(0, -2) + "니와";
-//   }
-
-//   return kr;
-// }
+  return nextKr;
+}
 
 function convertKana(reading: string, mode: Mode): string {
   const hiraReading = katakanaToHiragana(reading);
@@ -495,6 +506,7 @@ export function buildPronunciation(
 
   // 1순위: 토큰 기반 조사 は -> 와
   kr = applyParticleWaRuleFromTokens(kr, tokens);
+  kr = applyParticleWaRuleFromOriginal(kr, original);
 
   return {
     reading: normalized,

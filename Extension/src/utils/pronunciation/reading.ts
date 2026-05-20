@@ -2,17 +2,26 @@ import {
   detectSpecialReadingCase,
   type TokenLite,
 } from "./specialReadingRules";
+import {
+  applyLyricReadingDictionary,
+  getLyricCommonReading,
+} from "./lyricReadingDictionary";
 
 declare const kuromoji: any;
 
 let tokenizerPromise: Promise<any> | null = null;
 const readingCache = new Map<string, ReadingResult>();
+const DEBUG_READING_LOGS = false;
 
 const FURIGANA_PROXY_URL =
   "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev";
 const ELECTRON_READING_URL = "http://127.0.0.1:17654";
 const YAHOO_TIMEOUT_MS = 2500;
 const YAHOO_FALLBACK_MAX_LENGTH = 42;
+
+type LocalNetworkRequestInit = RequestInit & {
+  targetAddressSpace?: "loopback" | "local" | "private" | "public";
+};
 
 export type ReadingResult = {
   reading: string;
@@ -40,10 +49,6 @@ function countKanji(text: string): number {
 
 function kanaAndAsciiOnly(text: string): string {
   return katakanaToHiragana(text).replace(/[^ぁ-んーa-zA-Z0-9]/g, "");
-}
-
-function literalPattern(value: string): RegExp {
-  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 }
 
 function normalizeReadingText(input: string): string {
@@ -91,42 +96,7 @@ function applyLyricContextReadingOverrides(
   original: string,
   reading: string
 ): string {
-  let nextReading = reading;
-
-  const contextualOverrides: Array<{
-    surface: string;
-    reading: string;
-    wrongReadings: string[];
-  }> = [
-    { surface: "解けない", reading: "ほどけない", wrongReadings: ["とけない"] },
-    { surface: "今世", reading: "こんせい", wrongReadings: ["こんよ", "いませ", "こんせ"] },
-    { surface: "愛おしい", reading: "いとおしい", wrongReadings: ["あいおしい"] },
-    { surface: "愛おし", reading: "いとおし", wrongReadings: ["あいおし"] },
-    { surface: "失く", reading: "なく", wrongReadings: ["しつく"] },
-    { surface: "抱きしめ", reading: "だきしめ", wrongReadings: ["いだきしめ"] },
-    { surface: "抱き締め", reading: "だきしめ", wrongReadings: ["いだきしめ"] },
-    { surface: "被って", reading: "かぶって", wrongReadings: ["こうむって"] },
-    { surface: "被る", reading: "かぶる", wrongReadings: ["こうむる"] },
-    { surface: "埃を被って", reading: "ほこりをかぶって", wrongReadings: ["ほこりをこうむって"] },
-  ];
-
-  for (const override of contextualOverrides) {
-    if (!original.includes(override.surface)) continue;
-
-    for (const wrongReading of override.wrongReadings) {
-      nextReading = nextReading.replace(literalPattern(wrongReading), override.reading);
-    }
-  }
-
-  if (
-    /(?:温もり|ぬくもり|光|闇|愛|優しさ|夢|声|風|音|記憶|孤独|幸せ|悲しみ|涙|希望|世界)に包まれ/.test(
-      original
-    )
-  ) {
-    nextReading = nextReading.replace(/くるまれ/g, "つつまれ");
-  }
-
-  return nextReading;
+  return applyLyricReadingDictionary(original, reading);
 }
 
 function countHiragana(text: string): number {
@@ -193,27 +163,35 @@ async function getYahooReading(text: string): Promise<string | null> {
     });
 
     if (!res.ok) {
-      console.warn("[LyriKana] Yahoo proxy HTTP error:", res.status);
+      if (DEBUG_READING_LOGS) {
+        console.warn("[LyriKana] Yahoo proxy HTTP error:", res.status);
+      }
       return null;
     }
 
     const data = await res.json();
 
     if (!data?.result?.word || !Array.isArray(data.result.word)) {
-      console.warn("[LyriKana] Yahoo proxy invalid response:", data);
+      if (DEBUG_READING_LOGS) {
+        console.warn("[LyriKana] Yahoo proxy invalid response:", data);
+      }
       return null;
     }
 
     const reading = normalizeReadingText(flattenYahooWords(data.result.word));
 
-    console.log("[LyriKana] Yahoo reading:", {
-      original: text,
-      reading,
-    });
+    if (DEBUG_READING_LOGS) {
+      console.log("[LyriKana] Yahoo reading:", {
+        original: text,
+        reading,
+      });
+    }
 
     return reading || null;
   } catch (error) {
-    console.warn("[LyriKana] Yahoo reading fallback failed:", error);
+    if (DEBUG_READING_LOGS) {
+      console.warn("[LyriKana] Yahoo reading fallback failed:", error);
+    }
     return null;
   } finally {
     window.clearTimeout(timeoutId);
@@ -239,7 +217,9 @@ export function getTokenizer() {
         return;
       }
 
-      console.log("[LyriKana] building kuromoji tokenizer");
+      if (DEBUG_READING_LOGS) {
+        console.log("[LyriKana] building kuromoji tokenizer");
+      }
 
       kuromoji
         .builder({
@@ -247,12 +227,16 @@ export function getTokenizer() {
         })
         .build((err: any, tokenizer: any) => {
           if (err) {
-            console.error("[LyriKana] tokenizer error:", err);
+            if (DEBUG_READING_LOGS) {
+              console.error("[LyriKana] tokenizer error:", err);
+            }
             reject(err);
             return;
           }
 
-          console.log("[LyriKana] tokenizer ready");
+          if (DEBUG_READING_LOGS) {
+            console.log("[LyriKana] tokenizer ready");
+          }
           resolve(tokenizer);
         });
     });
@@ -265,55 +249,21 @@ function getKnownCompoundReading(
   current: TokenLite,
   next: TokenLite | undefined
 ): { reading: string; consumeNext: boolean } | null {
+  const singleReading = getLyricCommonReading(current.surface);
+  if (singleReading) {
+    return {
+      reading: singleReading,
+      consumeNext: false,
+    };
+  }
+
   if (!next) return null;
 
   const pair = `${current.surface}${next.surface}`;
-
-  const pairMap: Record<string, string> = {
-    今世: "こんせい",
-    来世: "らいせ",
-    前世: "ぜんせ",
-    現世: "げんせ",
-    世界: "せかい",
-    未来: "みらい",
-    過去: "かこ",
-    明日: "あした",
-    今日: "きょう",
-    昨日: "きのう",
-    大人: "おとな",
-    子供: "こども",
-    上手: "じょうず",
-    下手: "へた",
-    本当: "ほんとう",
-    言葉: "ことば",
-    心臓: "しんぞう",
-    心音: "しんおん",
-    瞬間: "しゅんかん",
-    永遠: "えいえん",
-    運命: "うんめい",
-    約束: "やくそく",
-    記憶: "きおく",
-    孤独: "こどく",
-    奇跡: "きせき",
-    涙声: "なみだごえ",
-    物語: "ものがたり",
-    何度: "なんど",
-    何回: "なんかい",
-    何処: "どこ",
-    何故: "なぜ",
-    一人: "ひとり",
-    二人: "ふたり",
-    一回: "いっかい",
-    一階: "いっかい",
-    一分: "いっぷん",
-    一本: "いっぽん",
-    一杯: "いっぱい",
-    一匹: "いっぴき",
-  };
-
-  if (pair in pairMap) {
+  const pairReading = getLyricCommonReading(pair);
+  if (pairReading) {
     return {
-      reading: pairMap[pair],
+      reading: pairReading,
       consumeNext: true,
     };
   }
@@ -364,7 +314,9 @@ async function tokenizeAndBuildLocalReading(text: string): Promise<ReadingResult
     pos: token.pos,
   }));
 
-  console.log("[LyriKana] token debug", debugTokens);
+  if (DEBUG_READING_LOGS) {
+    console.log("[LyriKana] token debug", debugTokens);
+  }
 
   const localReading = buildLocalReadingFromTokens(tokens);
 
@@ -424,7 +376,8 @@ async function postElectronReading<T>(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-    });
+      targetAddressSpace: "loopback",
+    } as LocalNetworkRequestInit);
 
     if (!response.ok) return null;
 
@@ -443,10 +396,12 @@ async function getSudachiReading(text: string): Promise<string | null> {
   const reading = normalizeReadingText(result?.reading ?? "");
 
   if (reading) {
-    console.log("[LyriKana] Sudachi reading:", {
-      original: text,
-      reading,
-    });
+    if (DEBUG_READING_LOGS) {
+      console.log("[LyriKana] Sudachi reading:", {
+        original: text,
+        reading,
+      });
+    }
   }
 
   return reading || null;
@@ -673,11 +628,13 @@ export async function getJapaneseReadingWithTokens(
   );
 
   if (fallbackDecision.shouldTry) {
-    console.log("[LyriKana] special reading fallback:", {
-      original: normalized,
-      localReading,
-      reasons: fallbackDecision.reasons,
-    });
+    if (DEBUG_READING_LOGS) {
+      console.log("[LyriKana] special reading fallback:", {
+        original: normalized,
+        localReading,
+        reasons: fallbackDecision.reasons,
+      });
+    }
 
     const sudachiReading = await getSudachiReading(normalized);
 
@@ -689,12 +646,14 @@ export async function getJapaneseReadingWithTokens(
         tokens
       );
 
-      console.log("[LyriKana] Sudachi comparison:", {
-        original: normalized,
-        localReading,
-        sudachiReading,
-        useSudachi,
-      });
+      if (DEBUG_READING_LOGS) {
+        console.log("[LyriKana] Sudachi comparison:", {
+          original: normalized,
+          localReading,
+          sudachiReading,
+          useSudachi,
+        });
+      }
 
       saveReadingCandidate(
         normalized,
@@ -719,12 +678,14 @@ export async function getJapaneseReadingWithTokens(
         tokens
       );
 
-      console.log("[LyriKana] fallback comparison:", {
-        original: normalized,
-        currentReading: finalReading,
-        yahooReading,
-        useYahoo,
-      });
+      if (DEBUG_READING_LOGS) {
+        console.log("[LyriKana] fallback comparison:", {
+          original: normalized,
+          currentReading: finalReading,
+          yahooReading,
+          useYahoo,
+        });
+      }
 
       finalReading = useYahoo ? yahooReading : localReading;
     }
@@ -742,11 +703,13 @@ export async function getJapaneseReadingWithTokens(
 
   readingCache.set(normalized, result);
 
-  console.log("[LyriKana] final reading:", {
-    original: normalized,
-    localReading,
-    finalReading,
-  });
+  if (DEBUG_READING_LOGS) {
+    console.log("[LyriKana] final reading:", {
+      original: normalized,
+      localReading,
+      finalReading,
+    });
+  }
 
   return result;
 }
