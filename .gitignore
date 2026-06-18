@@ -51,3 +51,9 @@ desktop.ini
 
 # Local generated data
 lyrikana-data-core/data/generated/
+
+# LyriKana Backend
+backend/.venv/
+backend/*.db
+backend/*.sqlite3
+backend/.env
