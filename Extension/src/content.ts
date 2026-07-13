@@ -1,9 +1,15 @@
 import {
   enrichLyricsInBackground,
-  parseLrcBase,
   parseLrcSyncMarkers,
 } from "./utils/lyrics/parseLrcWithPronunciation";
 import { getTokenizer } from "./utils/pronunciation/reading";
+import {
+  BackendRequestError,
+  resolveLyrics,
+  saveConvertedLyrics,
+  type BackendLyricLine,
+  type BackendSongResponse,
+} from "./api/backend";
 
 type LyriKanaSettings = {
   enabled: boolean;
@@ -52,18 +58,6 @@ type SongInfo = {
   duration?: number;
 };
 
-type LrcLibSong = {
-  trackName?: string;
-  artistName?: string;
-  albumName?: string;
-  duration?: number;
-  syncedLyrics?: string | null;
-  releaseDate?: string | null;
-  lyrikanaSyncScorerVersion?: number;
-  lyrikanaSyncScore?: number;
-  lyrikanaSyncReasons?: string[];
-};
-
 type CachedLineReading = Pick<LyricLine, "original" | "reading" | "kr" | "jp" | "en">;
 
 type PlayerCommand = "play-pause" | "next" | "previous";
@@ -78,6 +72,7 @@ let currentLyrics: LyricLine[] = [];
 let currentInstrumentalMarkers: number[] = [];
 let currentLineIndex = -1;
 let activeLyricsRequestId = 0;
+let activeLyricsAbortController: AbortController | null = null;
 let lastObservedTitle = "";
 let lastObservedArtist = "";
 let settings: LyriKanaSettings = { ...DEFAULT_SETTINGS };
@@ -97,9 +92,6 @@ const EXPLICIT_INSTRUMENTAL_MIN_GAP_SECONDS = 4;
 const INSTRUMENTAL_MIN_GAP_SECONDS = 9;
 const ELECTRON_OVERLAY_URL = "http://127.0.0.1:17654";
 const READING_CACHE_VERSION = 8;
-const LRC_SYNC_SCORER_VERSION = 1;
-const MIN_LRCLIB_SYNCED_CANDIDATES = 4;
-const MAX_LRCLIB_SEARCH_URLS = 10;
 const SONG_SWITCH_STALE_TIME_GUARD_MS = 45000;
 const SONG_SWITCH_MAX_INITIAL_TIME_SECONDS = 15;
 const SONG_SWITCH_STALE_TIME_GRACE_MS = 4500;
@@ -728,25 +720,6 @@ async function saveLineReadingToCache(line: LyricLine): Promise<boolean> {
   return result !== null;
 }
 
-async function saveLyricsToCache(
-  songInfo: SongInfo,
-  song: LrcLibSong,
-  selectedCandidate: LrcLibCandidateScore | null
-): Promise<void> {
-  await requestElectronJson("/cache/lyrics/save", {
-    songInfo,
-    providerPayload: {
-      ...song,
-      lyrikanaSyncScorerVersion: LRC_SYNC_SCORER_VERSION,
-      lyrikanaSyncScore:
-        selectedCandidate?.score ?? song.lyrikanaSyncScore ?? null,
-      lyrikanaSyncReasons:
-        selectedCandidate?.reasons ?? song.lyrikanaSyncReasons ?? [],
-    },
-    syncedLyrics: song.syncedLyrics,
-  });
-}
-
 function updateLyricsByTime(): void {
   const player = document.querySelector("video") as HTMLVideoElement | null;
   if (!player || currentLyrics.length === 0) return;
@@ -1027,16 +1000,19 @@ async function analyzeAndSaveMissingLineReadings(
     concurrency: 3,
     buildMode: "precise",
     indices: missingIndexes,
-    shouldStop: () => false,
-    onLine: (_index, builtLine) => {
+    shouldStop: () => requestId !== activeLyricsRequestId,
+    onLine: (index, builtLine) => {
+      if (requestId !== activeLyricsRequestId || !currentLyrics[index]) return;
+
+      currentLyrics[index] = {
+        ...currentLyrics[index],
+        ...builtLine,
+        original: currentLyrics[index].original,
+      };
+      refreshCurrentLineIfVisible(index);
+
       const task = (async () => {
         await saveLineReadingToCache(builtLine);
-        if (requestId !== activeLyricsRequestId) return;
-
-        const refreshedLine = await getCachedLineReadingsByOriginal([
-          builtLine.original,
-        ]);
-        updateCurrentLyricsFromCache(refreshedLine, requestId);
       })();
       saveTasks.push(task);
     },
@@ -1056,20 +1032,48 @@ async function analyzeAndSaveMissingLineReadings(
   await Promise.all(saveTasks);
 }
 
-function loadCurrentLyricsFromDb(
-  syncedLyrics: string,
-  cachedByOriginal: Map<string, CachedLineReading>,
-  requestId: number
+function backendReadingsByOriginal(
+  lines: BackendLyricLine[]
+): Map<string, CachedLineReading> {
+  return new Map(
+    lines
+      .filter((line) => Boolean(line.reading || line.kr || line.jp || line.en))
+      .map((line) => [
+        line.original,
+        {
+          original: line.original,
+          reading: line.reading || "",
+          kr: line.kr || "",
+          jp: line.jp || "",
+          en: line.en || "",
+        },
+      ])
+  );
+}
+
+function loadCurrentLyricsFromBackend(
+  response: BackendSongResponse,
+  cachedByOriginal: Map<string, CachedLineReading>
 ): boolean {
-  const baseLyrics = parseLrcBase(syncedLyrics) as LyricLine[];
+  const baseLyrics = response.lyrics
+    .filter((line): line is BackendLyricLine & { time: number } => line.time !== null)
+    .sort((first, second) => first.lineNo - second.lineNo)
+    .map((line) => ({
+      time: line.time,
+      original: line.original,
+      reading: line.reading || "",
+      kr: line.kr || "",
+      jp: line.jp || "",
+      en: line.en || "",
+    }));
 
   if (baseLyrics.length === 0) {
-    resetLyrics("No lyric lines");
+    resetLyrics("Synced lyrics not available");
     return false;
   }
 
   currentLyrics = applyCachedLineReadings(baseLyrics, cachedByOriginal);
-  currentInstrumentalMarkers = parseLrcSyncMarkers(syncedLyrics).map(
+  currentInstrumentalMarkers = parseLrcSyncMarkers(response.rawLrc || "").map(
     (marker) => marker.time
   );
   cachedPreciseLineIndexes = new Set(
@@ -1079,516 +1083,126 @@ function loadCurrentLyricsFromDb(
   );
   currentLineIndex = -1;
   lyricsLoadedAt = Date.now();
-
-  if (DEBUG_FLOW_LOGS) {
-    console.log("[LyriKana] lyrics loaded from DB cache:", {
-      requestId,
-      count: currentLyrics.length,
-      instrumentalMarkers: currentInstrumentalMarkers,
-      sample: currentLyrics.slice(0, 3),
-    });
-  }
-
   updateLyricsByTime();
   return true;
 }
 
-function normalizeForMatch(value: string | undefined): string {
-  return (value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-}
+async function persistCurrentLyrics(
+  songId: string,
+  requestId: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (requestId !== activeLyricsRequestId) return;
 
-function hasJapaneseScript(value: string): boolean {
-  return /[一-龯々ぁ-んァ-ヶ]/.test(value);
-}
-
-function uniqueValues(values: string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
-
-function getLrcLibSearchVariants(value: string): string[] {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  const variants = [normalized];
-
-  for (const match of normalized.matchAll(/[\[(（【]([^()[\]（）【】]+)[\])）】]/g)) {
-    variants.push(match[1]);
-  }
-
-  variants.push(
-    normalized.replace(/\s*[\[(（【][^()[\]（）【】]+[\])）】]\s*/g, " ").trim()
-  );
-
-  for (const part of normalized.split(/\s*(?:\/|\||｜|／)\s*/)) {
-    variants.push(part);
-  }
-
-  return uniqueValues(variants).sort((first, second) => {
-    const firstIsJapanese = hasJapaneseScript(first);
-    const secondIsJapanese = hasJapaneseScript(second);
-
-    if (firstIsJapanese !== secondIsJapanese) {
-      return firstIsJapanese ? -1 : 1;
-    }
-
-    return first.length - second.length;
-  });
-}
-
-function getDurationDelta(song: LrcLibSong, songInfo: SongInfo): number | null {
-  if (!songInfo.duration || typeof song.duration !== "number") {
-    return null;
-  }
-
-  return Math.abs(song.duration - songInfo.duration);
-}
-
-function getLrcLibSongIdentity(song: LrcLibSong): string {
-  return [
-    normalizeForMatch(song.trackName),
-    normalizeForMatch(song.artistName),
-    normalizeForMatch(song.albumName),
-    song.duration ?? "",
-    song.releaseDate ?? "",
-    song.syncedLyrics?.slice(0, 80) ?? "",
-  ].join("::");
-}
-
-function dedupeLrcLibSongs(songs: LrcLibSong[]): LrcLibSong[] {
-  const seen = new Set<string>();
-  const deduped: LrcLibSong[] = [];
-
-  for (const song of songs) {
-    const identity = getLrcLibSongIdentity(song);
-    if (seen.has(identity)) continue;
-
-    seen.add(identity);
-    deduped.push(song);
-  }
-
-  return deduped;
-}
-
-function buildLrcLibSearchUrls(song: SongInfo): string[] {
-  const urls: string[] = [];
-  const base = "https://lrclib.net/api/search";
-  const titleVariants = getLrcLibSearchVariants(song.title);
-  const artistVariants = getLrcLibSearchVariants(song.artist);
-  const searchPairs = titleVariants.flatMap((title) =>
-    artistVariants.map((artist) => ({ title, artist }))
-  );
-
-  for (const pair of searchPairs) {
-    if (song.releaseYear) {
-      const params = new URLSearchParams({
-        query: `${pair.title} ${pair.artist} ${song.releaseYear}`,
-      });
-      if (song.duration) {
-        params.set("duration", String(song.duration));
-      }
-      urls.push(`${base}?${params.toString()}`);
-    }
-
-    const params = new URLSearchParams({
-      query: `${pair.title} ${pair.artist}`,
-    });
-    if (song.duration) {
-      params.set("duration", String(song.duration));
-    }
-    urls.push(`${base}?${params.toString()}`);
-
-    const detailParams = new URLSearchParams({
-      track_name: pair.title,
-      artist_name: pair.artist,
-    });
-    if (song.duration) {
-      detailParams.set("duration", String(song.duration));
-    }
-    urls.push(`${base}?${detailParams.toString()}`);
-  }
-
-  return [...new Set(urls)];
-}
-
-function scoreLrcLibSong(song: LrcLibSong, songInfo: SongInfo): number {
-  let score = 0;
-  const titleVariants = getLrcLibSearchVariants(songInfo.title);
-  const artistVariants = getLrcLibSearchVariants(songInfo.artist);
-
-  if (song.syncedLyrics) score += 1000;
-  if (
-    titleVariants.some(
-      (title) => normalizeForMatch(song.trackName) === normalizeForMatch(title)
-    )
-  ) {
-    score += 120;
-  }
-  if (
-    artistVariants.some((artist) =>
-      normalizeForMatch(song.artistName).includes(normalizeForMatch(artist))
-    )
-  ) {
-    score += 80;
-  }
-  if (
-    hasJapaneseScript(song.trackName ?? "") &&
-    titleVariants.some((title) => hasJapaneseScript(title))
-  ) {
-    score += 40;
-  }
-  if (songInfo.releaseYear && song.releaseDate?.startsWith(songInfo.releaseYear)) {
-    score += 160;
-  }
-  const durationDelta = getDurationDelta(song, songInfo);
-  if (durationDelta !== null) {
-    score += Math.max(0, 260 - durationDelta * 60);
-  }
-
-  return score;
-}
-
-type LrcLibCandidateScore = {
-  song: LrcLibSong;
-  score: number;
-  reasons: string[];
-  lineCount: number;
-  firstTime: number | null;
-  lastTime: number | null;
-};
-
-function scoreLrcTimeline(song: LrcLibSong, songInfo: SongInfo): Omit<
-  LrcLibCandidateScore,
-  "song"
-> {
-  let score = scoreLrcLibSong(song, songInfo);
-  const reasons: string[] = [];
-  const lines = parseLrcBase(song.syncedLyrics ?? "");
-  const firstTime = lines[0]?.time ?? null;
-  const lastTime = lines.length > 0 ? lines[lines.length - 1].time : null;
-  const duration = songInfo.duration;
-
-  if (!song.syncedLyrics) {
-    return {
-      score: score - 1000,
-      reasons: ["no synced lyrics"],
-      lineCount: 0,
-      firstTime,
-      lastTime,
-    };
-  }
-
-  if (lines.length === 0) {
-    return {
-      score: score - 800,
-      reasons: ["synced lyrics parsed no timed lines"],
-      lineCount: 0,
-      firstTime,
-      lastTime,
-    };
-  }
-
-  score += Math.min(160, lines.length * 4);
-  reasons.push(`${lines.length} timed lines`);
-
-  if (lines.length < 6) {
-    score -= 160;
-    reasons.push("very few timed lines");
-  }
-
-  let nonIncreasingGaps = 0;
-  let veryDenseGaps = 0;
-  let maxGap = 0;
-
-  for (let index = 1; index < lines.length; index += 1) {
-    const gap = lines[index].time - lines[index - 1].time;
-
-    if (gap <= 0) {
-      nonIncreasingGaps += 1;
-    } else {
-      maxGap = Math.max(maxGap, gap);
-      if (gap < 0.18) veryDenseGaps += 1;
+  try {
+    await saveConvertedLyrics(
+      songId,
+      currentLyrics.map((line, lineNo) => ({
+        lineNo,
+        reading: line.reading,
+        kr: line.kr,
+        jp: line.jp,
+        en: line.en,
+      })),
+      signal
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    if (DEBUG_FLOW_LOGS) {
+      console.warn("[LyriKana] converted lyrics could not be persisted:", error);
     }
   }
-
-  if (nonIncreasingGaps > 0) {
-    score -= nonIncreasingGaps * 80;
-    reasons.push(`${nonIncreasingGaps} non-increasing timestamps`);
-  }
-
-  if (veryDenseGaps > Math.max(2, lines.length * 0.08)) {
-    score -= 90;
-    reasons.push("too many near-duplicate timestamps");
-  }
-
-  if (duration && firstTime !== null && lastTime !== null) {
-    const lyricSpan = Math.max(0, lastTime - firstTime);
-    const lyricDensity = lines.length / Math.max(1, lyricSpan / 60);
-    const outroSeconds = duration - lastTime;
-
-    if (lastTime > duration + 4) {
-      score -= Math.min(420, (lastTime - duration) * 55);
-      reasons.push("last lyric exceeds current track duration");
-    } else if (lastTime >= duration * 0.52) {
-      score += 100;
-      reasons.push("last lyric fits inside track duration");
-    } else {
-      score -= 180;
-      reasons.push("last lyric ends unusually early");
-    }
-
-    if (outroSeconds >= -2 && outroSeconds <= 45) {
-      score += Math.max(0, 75 - Math.abs(outroSeconds - 12) * 2.2);
-      reasons.push("outro length is plausible");
-    }
-
-    if (firstTime > Math.min(70, duration * 0.36)) {
-      score -= 120;
-      reasons.push("first lyric starts unusually late");
-    } else {
-      score += 35;
-      reasons.push("first lyric start is plausible");
-    }
-
-    if (maxGap > Math.max(45, duration * 0.42)) {
-      score -= 90;
-      reasons.push("contains an unusually long lyric gap");
-    }
-
-    if (lyricDensity < 2 || lyricDensity > 42) {
-      score -= 70;
-      reasons.push("lyric line density is unusual");
-    } else {
-      score += 45;
-      reasons.push("lyric line density is plausible");
-    }
-  }
-
-  return {
-    score,
-    reasons,
-    lineCount: lines.length,
-    firstTime,
-    lastTime,
-  };
-}
-
-function scoreLrcLibCandidate(
-  song: LrcLibSong,
-  songInfo: SongInfo
-): LrcLibCandidateScore {
-  return {
-    song,
-    ...scoreLrcTimeline(song, songInfo),
-  };
-}
-
-function selectBestLrcLibSong(
-  songs: LrcLibSong[],
-  songInfo: SongInfo
-): LrcLibCandidateScore | null {
-  const scored = dedupeLrcLibSongs(songs)
-    .filter((song) => song.syncedLyrics)
-    .map((song) => scoreLrcLibCandidate(song, songInfo))
-    .sort((first, second) => second.score - first.score);
-
-  return scored[0] ?? null;
-}
-
-function summarizeLrcLibCandidates(
-  songs: LrcLibSong[],
-  songInfo: SongInfo
-) {
-  return dedupeLrcLibSongs(songs)
-    .filter((song) => song.syncedLyrics)
-    .map((song) => scoreLrcLibCandidate(song, songInfo))
-    .sort((first, second) => second.score - first.score)
-    .map((candidate) => ({
-      score: Math.round(candidate.score),
-      trackName: candidate.song.trackName,
-      artistName: candidate.song.artistName,
-      albumName: candidate.song.albumName,
-      duration: candidate.song.duration,
-      lineCount: candidate.lineCount,
-      firstTime: candidate.firstTime,
-      lastTime: candidate.lastTime,
-      reasons: candidate.reasons,
-    }));
-}
-
-async function searchLrcLibLyrics(song: SongInfo): Promise<LrcLibSong[]> {
-  const results: LrcLibSong[] = [];
-  const urls = buildLrcLibSearchUrls(song);
-
-  for (const url of urls.slice(0, MAX_LRCLIB_SEARCH_URLS)) {
-    const res = await fetch(url);
-    const data: unknown = await res.json();
-
-    if (Array.isArray(data)) {
-      results.push(...(data as LrcLibSong[]));
-    }
-
-    const syncedCount = dedupeLrcLibSongs(results).filter(
-      (item) => item.syncedLyrics
-    ).length;
-
-    if (syncedCount >= MIN_LRCLIB_SYNCED_CANDIDATES) {
-      break;
-    }
-  }
-
-  return dedupeLrcLibSongs(results);
 }
 
 async function fetchLyrics(
   songInfo: SongInfo,
-  requestId: number
+  requestId: number,
+  signal?: AbortSignal
 ): Promise<void> {
   try {
-    const cachedLyrics = await requestElectronJson<{
-      providerPayload: LrcLibSong;
-      syncedLyrics: string;
-    }>("/cache/lyrics/get", { songInfo });
-
-    const cachedSong = cachedLyrics?.syncedLyrics
-      ? {
-          ...cachedLyrics.providerPayload,
-          syncedLyrics: cachedLyrics.syncedLyrics,
-        }
-      : undefined;
-
-    if (cachedSong?.syncedLyrics) {
-      const baseLyrics = parseLrcBase(cachedSong.syncedLyrics) as LyricLine[];
-      const cachedLines = await getCachedLineReadingsByOriginal(
-        baseLyrics.map((line) => line.original)
-      );
-
-      if (requestId !== activeLyricsRequestId) {
-        if (DEBUG_FLOW_LOGS) {
-          console.log("[LyriKana] stale lyrics response ignored", { requestId });
-        }
-        return;
-      }
-
-      const loadedFromCache = loadCurrentLyricsFromDb(
-        cachedSong.syncedLyrics,
-        cachedLines,
-        requestId
-      );
-
-      if (
-        loadedFromCache &&
-        hasCompleteLineReadings(baseLyrics, cachedLines)
-      ) {
-        return;
-      }
-
-      if (DEBUG_FLOW_LOGS) {
-        console.log("[LyriKana] cached song needs reading analysis:", {
-          requestId,
-          title: songInfo.title,
-          artist: songInfo.artist,
-          cachedLines: cachedLines.size,
-          totalLines: baseLyrics.length,
-        });
-      }
-
-      await analyzeAndSaveMissingLineReadings(baseLyrics, cachedLines, requestId);
-
-      if (requestId !== activeLyricsRequestId) return;
-
-      const refreshedLines = await getCachedLineReadingsByOriginal(
-        baseLyrics.map((line) => line.original)
-      );
-
-      if (requestId !== activeLyricsRequestId) return;
-
-      updateCurrentLyricsFromCache(refreshedLines, requestId);
-      return;
-    }
-
-    const data = await searchLrcLibLyrics(songInfo);
-
-    if (requestId !== activeLyricsRequestId) {
-      if (DEBUG_FLOW_LOGS) {
-        console.log("[LyriKana] stale lyrics response ignored", { requestId });
-      }
-      return;
-    }
-
-    if (data.length === 0) {
-      resetLyrics("Lyrics not found");
-      return;
-    }
-
-    const selectedCandidate = selectBestLrcLibSong(data, songInfo);
-    const song = selectedCandidate?.song ?? data[0];
-
-    if (DEBUG_FLOW_LOGS) {
-      console.log("[LyriKana] LRCLIB search summary:", {
-        requestId,
-        songInfo,
-        totalCandidates: data.length,
-        syncedCandidates: data.filter((item) => item.syncedLyrics).length,
-        selected: song
-          ? {
-              trackName: song.trackName,
-              artistName: song.artistName,
-              albumName: song.albumName,
-              duration: song.duration,
-              syncScore:
-                selectedCandidate?.score ?? song.lyrikanaSyncScore ?? null,
-              syncReasons:
-                selectedCandidate?.reasons ?? song.lyrikanaSyncReasons ?? [],
-            }
-          : null,
-        candidates: summarizeLrcLibCandidates(data, songInfo),
-      });
-    }
-
-    if (!song?.syncedLyrics) {
-      resetLyrics("Synced lyrics not available");
-      return;
-    }
-
-    await saveLyricsToCache(songInfo, song, selectedCandidate);
-
-    if (requestId !== activeLyricsRequestId) return;
-
-    const cachedAfterSave = await requestElectronJson<{
-      providerPayload: LrcLibSong;
-      syncedLyrics: string;
-    }>("/cache/lyrics/get", { songInfo });
-    const savedSyncedLyrics = cachedAfterSave?.syncedLyrics ?? song.syncedLyrics;
-    const baseLyrics = parseLrcBase(savedSyncedLyrics) as LyricLine[];
-
-    if (baseLyrics.length === 0) {
-      resetLyrics("No lyric lines");
-      return;
-    }
-
-    const cachedLines = await getCachedLineReadingsByOriginal(
-      baseLyrics.map((line) => line.original)
+    const response = await resolveLyrics(
+      {
+        title: songInfo.title,
+        artist: songInfo.artist,
+        duration: songInfo.duration,
+        playbackTime: getCurrentPlaybackTime(),
+      },
+      signal
     );
 
     if (requestId !== activeLyricsRequestId) return;
 
-    loadCurrentLyricsFromDb(savedSyncedLyrics, cachedLines, requestId);
+    if (response.status === "failed") {
+      resetLyrics(
+        response.error === "lyrics_not_found" ? "Lyrics not found" : "Lyrics error"
+      );
+      return;
+    }
+
+    if (response.lyrics.length === 0 || !response.rawLrc) {
+      resetLyrics("Lyrics are still processing");
+      return;
+    }
+
+    const backendCachedLines = backendReadingsByOriginal(response.lyrics);
+    const localCachedLines = await getCachedLineReadingsByOriginal(
+      response.lyrics.map((line) => line.original)
+    );
+    const cachedLines = new Map([
+      ...localCachedLines,
+      ...backendCachedLines,
+    ]);
+
+    if (requestId !== activeLyricsRequestId) return;
+    if (!loadCurrentLyricsFromBackend(response, cachedLines)) return;
+
+    const baseLyrics = response.lyrics
+      .filter((line): line is BackendLyricLine & { time: number } => line.time !== null)
+      .sort((first, second) => first.lineNo - second.lineNo)
+      .map((line) => ({
+        time: line.time,
+        original: line.original,
+        reading: "",
+        kr: "",
+        jp: "",
+        en: "",
+      }));
+    if (baseLyrics.length === 0) {
+      resetLyrics("No synced lyric lines");
+      return;
+    }
+
+    if (hasCompleteLineReadings(baseLyrics, cachedLines)) {
+      await persistCurrentLyrics(response.song.id, requestId, signal);
+      return;
+    }
 
     await analyzeAndSaveMissingLineReadings(baseLyrics, cachedLines, requestId);
-
     if (requestId !== activeLyricsRequestId) return;
 
-    const refreshedLines = await getCachedLineReadingsByOriginal(
+    const refreshedLocalLines = await getCachedLineReadingsByOriginal(
       baseLyrics.map((line) => line.original)
     );
-
-    if (requestId !== activeLyricsRequestId) return;
+    const refreshedLines = new Map([
+      ...backendCachedLines,
+      ...refreshedLocalLines,
+    ]);
 
     updateCurrentLyricsFromCache(refreshedLines, requestId);
+    await persistCurrentLyrics(response.song.id, requestId, signal);
   } catch (error) {
     if (requestId !== activeLyricsRequestId) return;
+    if (error instanceof DOMException && error.name === "AbortError") return;
+
     if (DEBUG_FLOW_LOGS) {
       console.error("[LyriKana] fetchLyrics error:", error);
     }
-    resetLyrics("Lyrics error");
+
+    resetLyrics(
+      error instanceof BackendRequestError && error.message === "backend_unavailable"
+        ? "Backend unavailable"
+        : "Lyrics error"
+    );
   }
 }
 
@@ -1610,13 +1224,15 @@ async function handleSongChange(): Promise<void> {
 
   lastSongKey = songKey;
   currentSongLabel = songKey;
+  activeLyricsAbortController?.abort();
+  activeLyricsAbortController = new AbortController();
   activeLyricsRequestId += 1;
   ignoreStalePlaybackTimeUntil = Date.now() + SONG_SWITCH_STALE_TIME_GUARD_MS;
   stalePlaybackTimeGuardActive = true;
   const requestId = activeLyricsRequestId;
 
   resetLyrics("Loading lyrics...");
-  await fetchLyrics(song, requestId);
+  await fetchLyrics(song, requestId, activeLyricsAbortController.signal);
 }
 
 function startObserver(): void {

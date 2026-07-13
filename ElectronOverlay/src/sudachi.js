@@ -1,8 +1,24 @@
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const SUDACHI_TIMEOUT_MS = 3500;
 const cache = new Map();
+
+function getPythonExecutable() {
+  if (process.env.LYRIKANA_PYTHON) return process.env.LYRIKANA_PYTHON;
+
+  const projectPython = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "backend",
+    ".venv",
+    "Scripts",
+    "python.exe"
+  );
+  return fs.existsSync(projectPython) ? projectPython : "python";
+}
 
 function analyzeWithSudachi({ text, splitMode = "C" }) {
   const normalizedText = String(text ?? "").trim();
@@ -19,7 +35,7 @@ function analyzeWithSudachi({ text, splitMode = "C" }) {
 
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(__dirname, "sudachi_analyze.py");
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonExecutable(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

@@ -4,17 +4,19 @@ const path = require("node:path");
 const {
   closeDatabase,
   getCachedLineReadings,
-  getCachedLyrics,
   getReadingCandidates,
   initDatabase,
   saveCachedLineReading,
-  saveCachedLyrics,
   saveReadingCandidate,
   saveReadingCorrection,
 } = require("./db");
 const { analyzeWithSudachi } = require("./sudachi");
 
 const PORT = 17654;
+const BACKEND_URL = (process.env.LYRIKANA_BACKEND_URL || "http://127.0.0.1:8000").replace(
+  /\/$/,
+  ""
+);
 let overlayWindow = null;
 let server = null;
 let clickThrough = false;
@@ -136,6 +138,38 @@ function writeJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+async function waitForBackend(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = 250;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${BACKEND_URL}/health`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (response.ok) {
+        console.log(`[LyriKana] Backend ready at ${BACKEND_URL}`);
+        return true;
+      }
+    } catch {
+      // The backend task may still be starting; retry with a bounded backoff.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(2000, Math.round(delayMs * 1.6));
+  }
+
+  console.warn(`[LyriKana] Backend unavailable at ${BACKEND_URL}; overlay remains active`);
+  sendToOverlay("overlay:update", {
+    songLabel: "LyriKana",
+    original: "Backend unavailable",
+    reading: "Start the LyriKana backend; the Extension will retry on the next track.",
+    translation: "",
+    next: "",
+  });
+  return false;
+}
+
 function startServer() {
   server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
@@ -144,7 +178,7 @@ function startServer() {
     }
 
     if (request.method === "GET" && request.url === "/health") {
-      writeJson(response, 200, { ok: true });
+      writeJson(response, 200, { status: "ok" });
       return;
     }
 
@@ -192,19 +226,6 @@ function startServer() {
           data: {
             commands: drainPlayerCommands(),
           },
-        });
-        return;
-      }
-
-      if (request.url === "/cache/lyrics/get") {
-        writeJson(response, 200, { ok: true, data: getCachedLyrics(payload.songInfo) });
-        return;
-      }
-
-      if (request.url === "/cache/lyrics/save") {
-        writeJson(response, 200, {
-          ok: true,
-          data: saveCachedLyrics(payload),
         });
         return;
       }
@@ -275,6 +296,7 @@ app.whenReady().then(() => {
   initDatabase(app);
   createOverlayWindow();
   startServer();
+  void waitForBackend();
   globalShortcut.register("CommandOrControl+Alt+L", toggleClickThrough);
 
   app.on("activate", () => {

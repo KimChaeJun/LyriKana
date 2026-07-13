@@ -2,21 +2,11 @@ const { DatabaseSync } = require("node:sqlite");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 let db = null;
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function normalizeSongKey(songInfo) {
-  const title = String(songInfo?.title ?? "").trim().toLowerCase();
-  const artist = String(songInfo?.artist ?? "").trim().toLowerCase();
-  const duration = Number.isFinite(Number(songInfo?.duration))
-    ? Math.round(Number(songInfo.duration))
-    : "";
-
-  return `${title}::${artist}::${duration}`;
 }
 
 function initDatabase(app) {
@@ -35,19 +25,6 @@ function initDatabase(app) {
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS lyric_sources (
-      song_key TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      artist TEXT NOT NULL,
-      duration INTEGER,
-      release_year TEXT,
-      provider TEXT NOT NULL,
-      provider_payload TEXT NOT NULL,
-      synced_lyrics TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS line_readings (
@@ -100,59 +77,6 @@ function initDatabase(app) {
 
   console.log(`[LyriKana] cache database ready: ${dbPath}`);
   return db;
-}
-
-function getCachedLyrics(songInfo) {
-  const songKey = normalizeSongKey(songInfo);
-  const row = db
-    .prepare(
-      `SELECT provider_payload, synced_lyrics
-       FROM lyric_sources
-       WHERE song_key = ?`
-    )
-    .get(songKey);
-
-  if (!row) return null;
-
-  return {
-    songKey,
-    providerPayload: JSON.parse(row.provider_payload),
-    syncedLyrics: row.synced_lyrics,
-  };
-}
-
-function saveCachedLyrics({ songInfo, providerPayload, syncedLyrics }) {
-  const songKey = normalizeSongKey(songInfo);
-  const timestamp = nowIso();
-
-  db.prepare(
-    `INSERT INTO lyric_sources (
-      song_key, title, artist, duration, release_year, provider,
-      provider_payload, synced_lyrics, created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, 'lrclib', ?, ?, ?, ?)
-    ON CONFLICT(song_key) DO UPDATE SET
-      title = excluded.title,
-      artist = excluded.artist,
-      duration = excluded.duration,
-      release_year = excluded.release_year,
-      provider = excluded.provider,
-      provider_payload = excluded.provider_payload,
-      synced_lyrics = excluded.synced_lyrics,
-      updated_at = excluded.updated_at`
-  ).run(
-    songKey,
-    songInfo.title ?? "",
-    songInfo.artist ?? "",
-    Number.isFinite(Number(songInfo.duration)) ? Math.round(Number(songInfo.duration)) : null,
-    songInfo.releaseYear ?? null,
-    JSON.stringify(providerPayload ?? {}),
-    syncedLyrics ?? "",
-    timestamp,
-    timestamp
-  );
-
-  return { songKey };
 }
 
 function getCachedLineReadings({ originals, engineVersion }) {
@@ -329,11 +253,9 @@ function closeDatabase() {
 module.exports = {
   closeDatabase,
   getCachedLineReadings,
-  getCachedLyrics,
   getReadingCandidates,
   initDatabase,
   saveCachedLineReading,
-  saveCachedLyrics,
   saveReadingCandidate,
   saveReadingCorrection,
 };

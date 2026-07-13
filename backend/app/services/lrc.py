@@ -1,34 +1,51 @@
+from __future__ import annotations
+
 import re
 
 
-TIME_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)")
+TIMESTAMP_RE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
+
+
+def _seconds(match: re.Match[str]) -> float:
+    fraction = match.group(3) or "0"
+    return int(match.group(1)) * 60 + int(match.group(2)) + int(fraction.ljust(3, "0")) / 1000
 
 
 def parse_lrc(original_lrc: str) -> list[dict]:
-    lines = []
+    timed_lines: list[tuple[float, str]] = []
+    plain_lines: list[str] = []
 
     for raw_line in original_lrc.splitlines():
-        match = TIME_RE.match(raw_line.strip())
-        if not match:
+        line = raw_line.strip()
+        if not line:
             continue
 
-        minute = int(match.group(1))
-        second = int(match.group(2))
-        millis = match.group(3) or "0"
-        text = match.group(4).strip()
+        matches = list(TIMESTAMP_RE.finditer(line))
+        if matches:
+            original = TIMESTAMP_RE.sub("", line).strip()
+            if not original:
+                continue
+            timed_lines.extend((_seconds(match), original) for match in matches)
+        elif not re.match(r"^\[[a-zA-Z]+:", line):
+            plain_lines.append(line)
 
-        time = minute * 60 + second + int(millis.ljust(3, "0")) / 1000
+    if timed_lines:
+        timed_lines.sort(key=lambda item: item[0])
+        source = timed_lines
+    else:
+        source = [(None, original) for original in plain_lines]
 
-        if text:
-            lines.append({
-                "order": len(lines) + 1,
-                "time": time,
-                "original": text,
-                "hiragana": None,
-                "korean_pronunciation": None,
-                "english_pronunciation": None,
-                "hard_mapped_pronunciation": None,
-                "user_feedback": None,
-            })
-
-    return lines
+    return [
+        {
+            "line_no": index,
+            "time": timestamp,
+            "original": original,
+            "reading": None,
+            "kr": None,
+            "jp": None,
+            "en": None,
+            "user_edit": False,
+            "reason_tags": [],
+        }
+        for index, (timestamp, original) in enumerate(source)
+    ]

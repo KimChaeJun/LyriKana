@@ -47,7 +47,11 @@ coverage/
 Thumbs.db
 desktop.ini
 .idea/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Local generated data
 lyrikana-data-core/data/generated/

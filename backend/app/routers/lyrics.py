@@ -1,137 +1,181 @@
-import hashlib
+from __future__ import annotations
+
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import SongInfo, Lyric
-from app.schemas import ConversionUpdate
-from app.services.lrclib import fetch_lrclib_lyrics
-from app.services.lrc import parse_lrc
-
-router = APIRouter(prefix="/api/lyrics", tags=["lyrics"])
+from app.models import Lyric, SongInfo
+from app.schemas import ConversionUpdate, LyricsUpdate, SongResolveRequest
+from app.services.jobs import processor
 
 
-def make_hash_id(*values: str | None) -> str:
-    raw = "|".join([value or "" for value in values])
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+router = APIRouter(prefix="/api/v1/songs", tags=["songs"])
+legacy_router = APIRouter(prefix="/api/lyrics", tags=["lyrics-compatibility"])
 
 
-def to_response(song: SongInfo, lyric: Lyric) -> dict:
-    lyric_lines = json.loads(lyric.lyric_lines_json)
+def _reason_tags(value: str | None) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except json.JSONDecodeError:
+        return []
 
+
+def _line_response(line: Lyric) -> dict:
     return {
-        "source": song.source,
-        "song_id": song.id,
-        "lyric_id": lyric.id,
-        "title": song.title,
-        "artist": song.artist,
-        "album": song.album,
-        "duration": song.duration,
-        "status": lyric.status,
-        "original_lrc": lyric.original_lrc,
-        "lyric_lines": lyric_lines,
-        "needs_conversion": lyric.status != "converted",
+        "lineNo": line.line_no,
+        "time": line.time,
+        "original": line.original,
+        "reading": line.reading,
+        "kr": line.kr,
+        "jp": line.jp,
+        "en": line.en,
+        "userEdit": line.user_edit,
+        "reasonTags": _reason_tags(line.reason_tags),
     }
 
 
-@router.get("/resolve")
-async def resolve_lyrics(
-    title: str,
+def _song_response(song: SongInfo, *, include_lyrics: bool = True) -> dict:
+    return {
+        "song": {
+            "id": song.id,
+            "title": song.title,
+            "artist": song.artist,
+            "album": song.album,
+            "duration": song.duration,
+            "source": song.source,
+        },
+        "status": song.status,
+        "progress": {
+            "total": song.progress_total,
+            "completed": song.progress_completed,
+            "failed": song.progress_failed,
+        },
+        "lyrics": [_line_response(line) for line in song.lyrics] if include_lyrics else [],
+        "rawLrc": song.raw_lrc,
+        "error": song.error_message,
+    }
+
+
+def _load_song(db: Session, song_id: str) -> SongInfo:
+    song = db.scalar(
+        select(SongInfo).options(selectinload(SongInfo.lyrics)).where(SongInfo.id == song_id)
+    )
+    if song is None:
+        raise HTTPException(status_code=404, detail="Song not found")
+    return song
+
+
+@router.post("/resolve", status_code=202)
+async def resolve_song(payload: SongResolveRequest, db: Session = Depends(get_db)):
+    song, _created = processor.get_or_create(
+        db,
+        title=payload.title,
+        artist=payload.artist,
+        album=payload.album,
+        duration=payload.duration,
+        retry=payload.retry,
+    )
+    processor.start_if_needed(song.id, song.status)
+    song = _load_song(db, song.id)
+    return _song_response(song)
+
+
+@router.get("/{song_id}")
+def get_song(song_id: str, db: Session = Depends(get_db)):
+    return _song_response(_load_song(db, song_id))
+
+
+@router.get("/{song_id}/lyrics")
+def get_song_lyrics(song_id: str, db: Session = Depends(get_db)):
+    return _song_response(_load_song(db, song_id))
+
+
+@router.get("/{song_id}/status")
+def get_song_status(song_id: str, db: Session = Depends(get_db)):
+    song = _load_song(db, song_id)
+    return _song_response(song, include_lyrics=False)
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+@router.patch("/{song_id}/lyrics")
+def update_song_lyrics(song_id: str, payload: LyricsUpdate, db: Session = Depends(get_db)):
+    song = _load_song(db, song_id)
+    by_line_no = {line.line_no: line for line in song.lyrics}
+
+    for update in payload.lyrics:
+        line = by_line_no.get(update.line_no)
+        if line is None:
+            raise HTTPException(status_code=404, detail=f"Lyric line {update.line_no} not found")
+        line.reading = _optional_text(update.reading)
+        line.kr = _optional_text(update.kr)
+        line.jp = _optional_text(update.jp)
+        line.en = _optional_text(update.en)
+        line.user_edit = update.user_edit
+        tags = list(dict.fromkeys(update.reason_tags + (["conversion_failed"] if update.failed else [])))
+        line.reason_tags = json.dumps(tags, ensure_ascii=False)
+
+    completed = sum(
+        1 for line in song.lyrics if any((line.reading, line.kr, line.jp, line.en))
+    )
+    failed = sum(1 for line in song.lyrics if "conversion_failed" in _reason_tags(line.reason_tags))
+    song.progress_total = len(song.lyrics)
+    song.progress_completed = completed
+    song.progress_failed = failed
+    if song.progress_total and completed == song.progress_total:
+        song.status = "completed"
+    elif failed and completed + failed >= song.progress_total:
+        song.status = "partial"
+    else:
+        song.status = "processing"
+
+    db.commit()
+    return _song_response(_load_song(db, song_id))
+
+
+@legacy_router.get("/resolve")
+async def legacy_resolve(
+    title: str = Query(min_length=1),
     artist: str | None = None,
     db: Session = Depends(get_db),
 ):
-    song_id = make_hash_id("youtube_music", artist, title)
-
-    song = db.query(SongInfo).filter(SongInfo.id == song_id).first()
-
-    if song:
-        lyric = db.query(Lyric).filter(Lyric.song_id == song.id).first()
-        if lyric:
-            return to_response(song, lyric)
-
-    fetched = await fetch_lrclib_lyrics(title=title, artist=artist)
-
-    if not fetched:
-        raise HTTPException(status_code=404, detail="Lyrics not found from LRCLIB")
-
-    song = SongInfo(
-        id=song_id,
-        source="youtube_music",
-        title=title,
-        artist=artist,
-        album=fetched.get("album"),
-        duration=fetched.get("duration"),
+    song, _created = processor.get_or_create(
+        db, title=title, artist=artist, album=None, duration=None
     )
-
-    original_lrc = fetched["original_lrc"]
-    lyric_id = make_hash_id(song_id, original_lrc)
-    parsed_lines = parse_lrc(original_lrc)
-
-    lyric = Lyric(
-        id=lyric_id,
-        song_id=song_id,
-        status="fetched",
-        original_lrc=original_lrc,
-        lyric_lines_json=json.dumps(parsed_lines, ensure_ascii=False),
-    )
-
-    db.add(song)
-    db.add(lyric)
-    db.commit()
-    db.refresh(song)
-    db.refresh(lyric)
-
-    return to_response(song, lyric)
+    processor.start_if_needed(song.id, song.status)
+    return _song_response(_load_song(db, song.id))
 
 
-@router.patch("/{song_id}/conversion")
-def update_conversion(
+@legacy_router.get("/{song_id}")
+def legacy_get(song_id: str, db: Session = Depends(get_db)):
+    return _song_response(_load_song(db, song_id))
+
+
+@legacy_router.patch("/{song_id}/conversion")
+def legacy_update_conversion(
     song_id: str,
     payload: ConversionUpdate,
     db: Session = Depends(get_db),
 ):
-    song = db.query(SongInfo).filter(SongInfo.id == song_id).first()
-
-    if not song:
-        raise HTTPException(status_code=404, detail="Song not found")
-
-    lyric = db.query(Lyric).filter(Lyric.song_id == song_id).first()
-
-    if not lyric:
-        raise HTTPException(status_code=404, detail="Lyric not found")
-
-    lyric.lyric_lines_json = json.dumps(
-        [line.model_dump() for line in payload.lyric_lines],
-        ensure_ascii=False,
-    )
-    lyric.hiragana = payload.hiragana
-    lyric.korean_pronunciation = payload.korean_pronunciation
-    lyric.english_pronunciation = payload.english_pronunciation
-    lyric.hard_mapped_pronunciation = payload.hard_mapped_pronunciation
-    lyric.user_feedback = payload.user_feedback
-    lyric.status = "converted"
-
-    db.commit()
-    db.refresh(lyric)
-
-    return to_response(song, lyric)
-
-
-@router.get("/{song_id}")
-def get_lyrics_by_song_id(
-    song_id: str,
-    db: Session = Depends(get_db),
-):
-    song = db.query(SongInfo).filter(SongInfo.id == song_id).first()
-
-    if not song:
-        raise HTTPException(status_code=404, detail="Song not found")
-
-    lyric = db.query(Lyric).filter(Lyric.song_id == song_id).first()
-
-    if not lyric:
-        raise HTTPException(status_code=404, detail="Lyric not found")
-
-    return to_response(song, lyric)
+    updates = []
+    for index, line in enumerate(payload.lyric_lines):
+        updates.append(
+            {
+                "lineNo": max(0, line.order - 1) if line.order else index,
+                "reading": line.hiragana,
+                "kr": line.korean_pronunciation,
+                "jp": line.hard_mapped_pronunciation,
+                "en": line.english_pronunciation,
+                "reasonTags": [],
+            }
+        )
+    return update_song_lyrics(song_id, LyricsUpdate.model_validate({"lyrics": updates}), db)

@@ -11,7 +11,7 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
-    "types": ["chrome", "node"]
+    "types": ["chrome", "node", "vite/client"]
   },
   "include": [
     "src/**/*.ts",

@@ -13,8 +13,8 @@
   },
   "host_permissions": [
     "https://music.youtube.com/*",
+    "http://127.0.0.1:8000/*",
     "http://127.0.0.1:17654/*",
-    "https://lrclib.net/*",
     "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev/*"
   ], 
   "content_scripts": [

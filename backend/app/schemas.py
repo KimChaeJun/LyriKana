@@ -1,13 +1,42 @@
-from pydantic import BaseModel
-from typing import Any
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class LyricResolveQuery(BaseModel):
-    title: str
-    artist: str | None = None
+def to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part.capitalize() for part in tail)
 
 
-class LyricLine(BaseModel):
+class ApiModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+
+class SongResolveRequest(ApiModel):
+    title: str = Field(min_length=1, max_length=255)
+    artist: str | None = Field(default=None, max_length=255)
+    album: str | None = Field(default=None, max_length=255)
+    duration: int | None = Field(default=None, ge=0)
+    playback_time: float | None = Field(default=None, ge=0)
+    retry: bool = False
+
+
+class LyricLineUpdate(ApiModel):
+    line_no: int = Field(ge=0)
+    reading: str | None = None
+    kr: str | None = None
+    jp: str | None = None
+    en: str | None = None
+    user_edit: bool = False
+    reason_tags: list[str] = Field(default_factory=list)
+    failed: bool = False
+
+
+class LyricsUpdate(ApiModel):
+    lyrics: list[LyricLineUpdate]
+
+
+class LegacyLyricLine(BaseModel):
     order: int
     time: float | None = None
     original: str
@@ -19,23 +48,9 @@ class LyricLine(BaseModel):
 
 
 class ConversionUpdate(BaseModel):
-    lyric_lines: list[LyricLine]
+    lyric_lines: list[LegacyLyricLine]
     hiragana: str | None = None
     korean_pronunciation: str | None = None
     english_pronunciation: str | None = None
     hard_mapped_pronunciation: str | None = None
     user_feedback: str | None = None
-
-
-class LyricResponse(BaseModel):
-    source: str
-    song_id: str
-    lyric_id: str
-    title: str
-    artist: str | None = None
-    album: str | None = None
-    duration: int | None = None
-    status: str
-    original_lrc: str
-    lyric_lines: list[dict[str, Any]]
-    needs_conversion: bool

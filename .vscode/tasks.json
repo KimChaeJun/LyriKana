@@ -1,0 +1,117 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "LyriKana: Backend",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-backend.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "lyrikana-backend",
+        "pattern": [{ "regexp": "^(.*)$", "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Uvicorn running on"
+        }
+      },
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "LyriKana: Extension Watch",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-extension.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "lyrikana-extension",
+        "pattern": [{ "regexp": "^(.*)$", "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "built in|watching for file changes"
+        }
+      },
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "LyriKana: Electron Overlay",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-electron.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "lyrikana-electron",
+        "pattern": [{ "regexp": "^(.*)$", "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Electron overlay server listening"
+        }
+      },
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "LyriKana: Start All",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "LyriKana: Backend",
+        "LyriKana: Extension Watch",
+        "LyriKana: Electron Overlay"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Install Dependencies",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\setup.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Build Extension",
+      "type": "npm",
+      "script": "build",
+      "path": "Extension",
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Run Tests",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\test.ps1"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
