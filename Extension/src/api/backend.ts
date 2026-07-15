@@ -1,8 +1,3 @@
-const API_BASE = (import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000").replace(
-  /\/$/,
-  ""
-);
-
 export type ProcessingStatus =
   | "pending"
   | "fetching"
@@ -41,7 +36,10 @@ export type BackendSongResponse = {
   lyrics: BackendLyricLine[];
   rawLrc: string | null;
   error: string | null;
+  cacheHit: boolean;
 };
+
+export type InitialResolveListener = (response: BackendSongResponse) => void;
 
 export type ConvertedLyricLine = {
   lineNo: number;
@@ -64,30 +62,79 @@ export class BackendRequestError extends Error {
   }
 }
 
+type BackendRelayResponse = {
+  ok: boolean;
+  status: number;
+  payload?: unknown;
+  error?: string;
+};
+
+function canUseExtensionBackendRelay(): boolean {
+  return (
+    typeof chrome !== "undefined" &&
+    Boolean(chrome.runtime?.id && chrome.runtime.sendMessage)
+  );
+}
+
+async function requestThroughExtension(
+  path: string,
+  init: RequestInit
+): Promise<BackendRelayResponse> {
+  if (init.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+
+  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  const pending = chrome.runtime.sendMessage({
+    type: "LYRIKANA_BACKEND_REQUEST",
+    path,
+    method: init.method || "GET",
+    headers,
+    body: typeof init.body === "string" ? init.body : undefined,
+  }) as Promise<BackendRelayResponse>;
+
+  if (!init.signal) return pending;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException("Request aborted", "AbortError"));
+    init.signal?.addEventListener("abort", abort, { once: true });
+    pending.then(resolve, reject).finally(() => {
+      init.signal?.removeEventListener("abort", abort);
+    });
+  });
+}
+
+function backendErrorDetail(payload: unknown, status: number): string {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail) return detail;
+  }
+  return `backend_http_${status}`;
+}
+
 async function requestJson<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
-  let response: Response;
+  if (!canUseExtensionBackendRelay()) {
+    throw new BackendRequestError("backend_unavailable");
+  }
+
+  let relayed: BackendRelayResponse;
   try {
-    response = await fetch(`${API_BASE}${path}`, init);
+    relayed = await requestThroughExtension(path, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new BackendRequestError("backend_unavailable");
   }
 
-  if (!response.ok) {
-    let detail = `backend_http_${response.status}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail || detail;
-    } catch {
-      // Keep the stable HTTP fallback code when the body is not JSON.
-    }
-    throw new BackendRequestError(detail, response.status);
+  if (!relayed || relayed.status === 0 || relayed.error === "backend_unavailable") {
+    throw new BackendRequestError("backend_unavailable");
   }
-
-  return response.json() as Promise<T>;
+  if (!relayed.ok) {
+    throw new BackendRequestError(
+      backendErrorDetail(relayed.payload, relayed.status),
+      relayed.status
+    );
+  }
+  return relayed.payload as T;
 }
 
 export function createSongKey(title: string, artist?: string): string {
@@ -125,7 +172,8 @@ export async function resolveLyrics(
     duration?: number;
     playbackTime?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onInitialResolve?: InitialResolveListener
 ): Promise<BackendSongResponse> {
   let result = await requestJson<BackendSongResponse>("/api/v1/songs/resolve", {
     method: "POST",
@@ -133,16 +181,23 @@ export async function resolveLyrics(
     body: JSON.stringify(song),
     signal,
   });
+  const cacheHit = result.cacheHit ?? false;
+  result = { ...result, cacheHit };
+  onInitialResolve?.(result);
 
   let backoff = 250;
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 60_000;
   while (
     (result.status === "pending" || result.status === "fetching") &&
     Date.now() < deadline
   ) {
     await delay(backoff, signal);
-    result = await getSong(result.song.id, signal);
+    result = { ...(await getSong(result.song.id, signal)), cacheHit };
     backoff = Math.min(1_500, Math.round(backoff * 1.6));
+  }
+
+  if (result.status === "pending" || result.status === "fetching") {
+    throw new BackendRequestError("lyrics_processing_timeout");
   }
 
   return result;
@@ -160,5 +215,3 @@ export async function saveConvertedLyrics(
     signal,
   });
 }
-
-export const backendApiBase = API_BASE;

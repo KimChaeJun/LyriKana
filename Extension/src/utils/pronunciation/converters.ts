@@ -1,7 +1,13 @@
 import type { TokenLite } from "./specialReadingRules";
+import {
+  normalizeDisplayReading,
+  toSpokenReading,
+} from "./readingVariants";
 
 export type PronunciationResult = {
   reading: string;
+  displayReading: string;
+  spokenReading: string;
   kr: string;
   jp: string;
   en: string;
@@ -195,18 +201,6 @@ function isSmallKana(char: string): boolean {
   return /[ゃゅょぁぃぅぇぉゎ]/.test(char);
 }
 
-function getVowelFromKanaUnit(unit: string): string {
-  const last = unit[unit.length - 1];
-
-  if (/[あかがさざただなはばぱまやらわぁゃ]/.test(last)) return "a";
-  if (/[いきぎしじちぢにひびぴみりぃ]/.test(last)) return "i";
-  if (/[うくぐすずつづぬふぶぷむゆるぅゅゔ]/.test(last)) return "u";
-  if (/[えけげせぜてでねへべぺめれぇ]/.test(last)) return "e";
-  if (/[おこごそぞとのほぼぽもよろをぉょ]/.test(last)) return "o";
-
-  return "";
-}
-
 function isHangulSyllable(char: string): boolean {
   return /^[가-힣]$/.test(char);
 }
@@ -309,86 +303,16 @@ function addSokuonAsBatchim(tokens: string[]): boolean {
   return true;
 }
 
-function applyLongVowel(tokens: string[], previousUnit: string, mode: Mode): void {
+function applyLongVowel(tokens: string[]): void {
   if (tokens.length === 0) return;
 
   const lastToken = tokens[tokens.length - 1];
   if (!lastToken) return;
-
-  const vowel = getVowelFromKanaUnit(previousUnit);
-  if (!vowel) {
-    tokens[tokens.length - 1] = lastToken + "ー";
-    return;
-  }
-
-  if (mode === "EN") {
-    tokens[tokens.length - 1] = lastToken + vowel;
-    return;
-  }
-
-  const longVowelMap: Record<string, string> = {
-    a: "아",
-    i: "이",
-    u: "우",
-    e: "에",
-    o: "오",
-  };
-
-  tokens[tokens.length - 1] = lastToken + longVowelMap[vowel];
+  tokens[tokens.length - 1] = lastToken + "-";
 }
 
 function postProcessKR(text: string): string {
   return text.replace(/ああ/g, "아아");
-}
-
-function isParticleHaToken(token: TokenLite | undefined): boolean {
-  return !!token && token.surface === "は" && token.pos === "助詞";
-}
-
-function applyParticleWaRuleFromTokens(
-  kr: string,
-  tokens: TokenLite[]
-): string {
-  if (!kr || tokens.length === 0) return kr;
-
-  const lastToken = tokens[tokens.length - 1];
-
-  // 마지막 토큰이 조사 は 인 경우만 와 처리
-  if (isParticleHaToken(lastToken) && kr.endsWith("하")) {
-    return kr.slice(0, -1) + "와";
-  }
-
-  return kr;
-}
-
-function applyParticleWaRuleFromOriginal(
-  kr: string,
-  original?: string
-): string {
-  if (!kr || !original) return kr;
-
-  let nextKr = kr;
-
-  if (original.includes("には")) {
-    nextKr = nextKr.replace(/니하/g, "니와");
-  }
-  if (original.includes("では")) {
-    nextKr = nextKr.replace(/데하/g, "데와");
-  }
-  if (original.includes("とは")) {
-    nextKr = nextKr.replace(/토하/g, "토와");
-  }
-  if (original.includes("しは")) {
-    nextKr = nextKr.replace(/시하/g, "시와");
-  }
-  if (original.includes("へは")) {
-    nextKr = nextKr.replace(/에하/g, "에와").replace(/헤하/g, "헤와");
-  }
-  if (original.trim().endsWith("は") && nextKr.endsWith("하")) {
-    nextKr = nextKr.slice(0, -1) + "와";
-  }
-
-  return nextKr;
 }
 
 function convertKana(reading: string, mode: Mode): string {
@@ -398,7 +322,6 @@ function convertKana(reading: string, mode: Mode): string {
   const tokens: string[] = [];
   let i = 0;
   let pendingSokuon = false;
-  let previousUnit = "";
 
   while (i < normalizedReading.length) {
     const char = normalizedReading[i];
@@ -418,7 +341,7 @@ function convertKana(reading: string, mode: Mode): string {
     }
 
     if (isLongVowel(char)) {
-      applyLongVowel(tokens, previousUnit, mode);
+      applyLongVowel(tokens);
       i += 1;
       continue;
     }
@@ -458,7 +381,6 @@ function convertKana(reading: string, mode: Mode): string {
         tokens.push(startsWithLabial(nextToken) ? "ㅁ" : "ㄴ");
       }
 
-      previousUnit = unit;
       i = nextIndex;
       continue;
     }
@@ -485,7 +407,6 @@ function convertKana(reading: string, mode: Mode): string {
       }
     }
 
-    previousUnit = unit;
     i = nextIndex;
   }
 
@@ -495,21 +416,22 @@ function convertKana(reading: string, mode: Mode): string {
 
 export function buildPronunciation(
   reading: string,
-  original?: string,
+  _original?: string,
   tokens: TokenLite[] = []
 ): PronunciationResult {
-  const normalized = katakanaToHiragana(reading.trim());
-
-  let kr = convertKana(normalized, "KR");
-  const jp = convertKana(normalized, "JP");
-  const en = convertKana(normalized, "EN");
-
-  // 1순위: 토큰 기반 조사 は -> 와
-  kr = applyParticleWaRuleFromTokens(kr, tokens);
-  kr = applyParticleWaRuleFromOriginal(kr, original);
+  const displayReading = normalizeDisplayReading(
+    katakanaToHiragana(reading.trim()),
+    tokens
+  );
+  const spokenReading = toSpokenReading(displayReading, tokens);
+  const kr = convertKana(spokenReading, "KR");
+  const jp = convertKana(spokenReading, "JP");
+  const en = convertKana(spokenReading, "EN");
 
   return {
-    reading: normalized,
+    reading: displayReading,
+    displayReading,
+    spokenReading,
     kr,
     jp,
     en,

@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from app.models import Lyric, SongInfo
 from app.services import jobs
+from app.services.normalization import make_song_id
 
 
 SAMPLE_LRC = "[00:01.00]日本語の歌詞\n[00:03.50]次の行"
@@ -44,6 +45,7 @@ def test_resolve_cache_conversion_and_status(api_client, monkeypatch):
         json={"title": " Song ", "artist": "ARTIST", "duration": 180},
     )
     assert first.status_code == 202
+    assert first.json()["cacheHit"] is False
     song_id = first.json()["song"]["id"]
 
     prepared = wait_for_status(client, song_id, {"processing"})
@@ -76,6 +78,7 @@ def test_resolve_cache_conversion_and_status(api_client, monkeypatch):
     assert second.status_code == 202
     assert second.json()["song"]["id"] == song_id
     assert second.json()["status"] == "completed"
+    assert second.json()["cacheHit"] is True
     assert calls == 1
 
     with test_session() as db:
@@ -101,6 +104,82 @@ def test_duplicate_requests_share_one_background_job(api_client, monkeypatch):
     assert calls == 1
 
 
+def test_provider_metadata_does_not_overwrite_request_identity(api_client, monkeypatch):
+    client, test_session = api_client
+
+    async def fake_fetch(**_kwargs):
+        return {
+            "trackName": "GOOD DAY",
+            "artistName": "Song, Mrs. GREEN APPLE",
+            "albumName": None,
+            "duration": 257,
+            "syncedLyrics": SAMPLE_LRC,
+        }
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", fake_fetch)
+    response = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "GOOD DAY", "artist": "Mrs. GREEN APPLE", "duration": 258},
+    )
+    song_id = response.json()["song"]["id"]
+    prepared = wait_for_status(client, song_id, {"processing"})
+
+    assert prepared["song"]["title"] == "GOOD DAY"
+    assert prepared["song"]["artist"] == "Mrs. GREEN APPLE"
+    with test_session() as db:
+        song = db.get(SongInfo, song_id)
+        assert song.normalized_artist == "mrs. green apple"
+
+
+def test_resolve_repairs_provider_mutated_identity_without_losing_cache(api_client):
+    client, test_session = api_client
+    song_id = make_song_id("GOOD DAY", "Mrs. GREEN APPLE")
+
+    with test_session() as db:
+        db.add(
+            SongInfo(
+                id=song_id,
+                title="GOOD DAY",
+                artist="Song, Mrs. GREEN APPLE",
+                normalized_title="good day",
+                normalized_artist="song, mrs. green apple",
+                duration=257,
+                source="lrclib",
+                raw_lrc="[00:01.00]cached line",
+                status="completed",
+                progress_total=1,
+                progress_completed=1,
+            )
+        )
+        db.add(
+            Lyric(
+                song_id=song_id,
+                line_no=0,
+                time=1.0,
+                original="cached line",
+                reading="cached line",
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "GOOD DAY", "artist": "Mrs. GREEN APPLE", "duration": 258},
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["cacheHit"] is True
+    assert payload["status"] == "completed"
+    assert payload["song"]["id"] == song_id
+    assert payload["song"]["artist"] == "Mrs. GREEN APPLE"
+    assert [line["original"] for line in payload["lyrics"]] == ["cached line"]
+    with test_session() as db:
+        assert db.scalar(select(func.count()).select_from(SongInfo)) == 1
+        repaired = db.get(SongInfo, song_id)
+        assert repaired.normalized_artist == "mrs. green apple"
+
+
 def test_lrclib_no_result_is_reported_as_failed(api_client, monkeypatch):
     client, _test_session = api_client
 
@@ -115,6 +194,40 @@ def test_lrclib_no_result_is_reported_as_failed(api_client, monkeypatch):
     failed = wait_for_status(client, song_id, {"failed"})
     assert failed["error"] == "lyrics_not_found"
     assert failed["lyrics"] == []
+
+
+def test_transient_provider_timeout_is_retried_on_next_resolve(api_client, monkeypatch):
+    client, _test_session = api_client
+    calls = 0
+
+    async def flaky_fetch(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise jobs.httpx.ReadTimeout("slow provider")
+        return {
+            "trackName": "Retry Song",
+            "artistName": "Artist",
+            "syncedLyrics": SAMPLE_LRC,
+        }
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", flaky_fetch)
+    first = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Retry Song", "artist": "Artist"},
+    )
+    song_id = first.json()["song"]["id"]
+    failed = wait_for_status(client, song_id, {"failed"})
+    assert failed["error"] == "provider_timeout"
+
+    second = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Retry Song", "artist": "Artist"},
+    )
+    assert second.json()["cacheHit"] is True
+    prepared = wait_for_status(client, song_id, {"processing"})
+    assert prepared["error"] is None
+    assert calls == 2
 
 
 def test_partial_conversion_tracks_failed_lines(api_client, monkeypatch):

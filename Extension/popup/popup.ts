@@ -6,12 +6,6 @@ import {
   savePopupSettings,
 } from "./popupSettings";
 
-const ELECTRON_OVERLAY_URL = "http://127.0.0.1:17654";
-
-type LocalNetworkRequestInit = RequestInit & {
-  targetAddressSpace?: "loopback" | "local" | "private" | "public";
-};
-
 const fields = {
   enabled: document.querySelector<HTMLInputElement>("#enabled"),
   showReading: document.querySelector<HTMLInputElement>("#showReading"),
@@ -96,14 +90,11 @@ function render(nextSettings: LyriKanaSettings): void {
 }
 
 function postSettingsToElectron(nextSettings: LyriKanaSettings): void {
-  fetch(`${ELECTRON_OVERLAY_URL}/settings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+  void chrome.runtime.sendMessage({
+    type: "LYRIKANA_ELECTRON_REQUEST",
+    path: "/settings",
     body: JSON.stringify(nextSettings),
-    targetAddressSpace: "loopback",
-  } as LocalNetworkRequestInit).catch(() => {
+  }).catch(() => {
     // Electron companion may be closed; persisted settings still apply later.
   });
 }

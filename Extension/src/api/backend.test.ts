@@ -34,6 +34,7 @@ const processingResponse: BackendSongResponse = {
   ],
   rawLrc: "[00:01.25]日本語",
   error: null,
+  cacheHit: false,
 };
 
 afterEach(() => {
@@ -48,13 +49,14 @@ describe("backend API client", () => {
   });
 
   it("posts song metadata and returns prepared lyrics", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(processingResponse), {
-        status: 202,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const sendMessage = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      payload: processingResponse,
+    });
+    vi.stubGlobal("chrome", {
+      runtime: { id: "test-extension", sendMessage },
+    });
 
     const result = await resolveLyrics({
       title: "Song",
@@ -64,39 +66,119 @@ describe("backend API client", () => {
     });
 
     expect(result.status).toBe("processing");
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toMatchObject({
+    expect(result.cacheHit).toBe(false);
+    const message = sendMessage.mock.calls[0][0];
+    expect(message.method).toBe("POST");
+    expect(JSON.parse(String(message.body))).toMatchObject({
       title: "Song",
       duration: 180,
       playbackTime: 12.5,
     });
   });
 
+  it("routes backend requests through the extension service worker", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      payload: {
+        ...processingResponse,
+        status: "completed",
+        progress: { total: 1, completed: 1, failed: 0 },
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("chrome", {
+      runtime: { id: "test-extension", sendMessage },
+    });
+
+    const result = await resolveLyrics({ title: "Song", artist: "Artist" });
+
+    expect(result.status).toBe("completed");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "LYRIKANA_BACKEND_REQUEST",
+        path: "/api/v1/songs/resolve",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      })
+    );
+  });
+
+  it("reports the first DB lookup result and preserves a cache miss while polling", async () => {
+    const initialResolve = vi.fn();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce(
+        {
+          ok: true,
+          status: 202,
+          payload: {
+            ...processingResponse,
+            status: "pending",
+            lyrics: [],
+            rawLrc: null,
+            cacheHit: false,
+          },
+        }
+      )
+      .mockResolvedValueOnce(
+        {
+          ok: true,
+          status: 200,
+          payload: {
+            ...processingResponse,
+            cacheHit: true,
+          },
+        }
+      );
+    vi.stubGlobal("chrome", {
+      runtime: { id: "test-extension", sendMessage },
+    });
+
+    const result = await resolveLyrics(
+      { title: "First play", artist: "Artist" },
+      undefined,
+      initialResolve
+    );
+
+    expect(initialResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "pending", cacheHit: false })
+    );
+    expect(result).toMatchObject({ status: "processing", cacheHit: false });
+  });
+
   it("persists line conversions with the versioned endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
+    const sendMessage = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      payload: {
           ...processingResponse,
           status: "completed",
           progress: { total: 1, completed: 1, failed: 0 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
+      },
+    });
+    vi.stubGlobal("chrome", {
+      runtime: { id: "test-extension", sendMessage },
+    });
 
     await saveConvertedLyrics("song-1", [
       { lineNo: 0, reading: "にほんご", kr: "니혼고", jp: "nihongo", en: "" },
     ]);
 
-    expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/songs/song-1/lyrics");
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(JSON.parse(String(init.body)).lyrics[0].lineNo).toBe(0);
+    const message = sendMessage.mock.calls[0][0];
+    expect(message.path).toBe("/api/v1/songs/song-1/lyrics");
+    expect(JSON.parse(String(message.body)).lyrics[0].lineNo).toBe(0);
   });
 
   it("distinguishes an unavailable backend from missing lyrics", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    vi.stubGlobal("chrome", {
+      runtime: {
+        id: "test-extension",
+        sendMessage: vi.fn().mockRejectedValue(new TypeError("offline")),
+      },
+    });
 
     await expect(resolveLyrics({ title: "Song" })).rejects.toEqual(
       expect.objectContaining<Partial<BackendRequestError>>({

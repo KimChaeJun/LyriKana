@@ -38,7 +38,9 @@ def _line_response(line: Lyric) -> dict:
     }
 
 
-def _song_response(song: SongInfo, *, include_lyrics: bool = True) -> dict:
+def _song_response(
+    song: SongInfo, *, include_lyrics: bool = True, cache_hit: bool = True
+) -> dict:
     return {
         "song": {
             "id": song.id,
@@ -57,6 +59,7 @@ def _song_response(song: SongInfo, *, include_lyrics: bool = True) -> dict:
         "lyrics": [_line_response(line) for line in song.lyrics] if include_lyrics else [],
         "rawLrc": song.raw_lrc,
         "error": song.error_message,
+        "cacheHit": cache_hit,
     }
 
 
@@ -71,7 +74,7 @@ def _load_song(db: Session, song_id: str) -> SongInfo:
 
 @router.post("/resolve", status_code=202)
 async def resolve_song(payload: SongResolveRequest, db: Session = Depends(get_db)):
-    song, _created = processor.get_or_create(
+    song, created = processor.get_or_create(
         db,
         title=payload.title,
         artist=payload.artist,
@@ -81,7 +84,7 @@ async def resolve_song(payload: SongResolveRequest, db: Session = Depends(get_db
     )
     processor.start_if_needed(song.id, song.status)
     song = _load_song(db, song.id)
-    return _song_response(song)
+    return _song_response(song, cache_hit=not created)
 
 
 @router.get("/{song_id}")
@@ -148,11 +151,11 @@ async def legacy_resolve(
     artist: str | None = None,
     db: Session = Depends(get_db),
 ):
-    song, _created = processor.get_or_create(
+    song, created = processor.get_or_create(
         db, title=title, artist=artist, album=None, duration=None
     )
     processor.start_if_needed(song.id, song.status)
-    return _song_response(_load_song(db, song.id))
+    return _song_response(_load_song(db, song.id), cache_hit=not created)
 
 
 @legacy_router.get("/{song_id}")

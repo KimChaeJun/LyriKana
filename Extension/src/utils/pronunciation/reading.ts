@@ -5,7 +5,14 @@ import {
 import {
   applyLyricReadingDictionary,
   getLyricCommonReading,
+  resolveLyricReadingCandidates,
+  stripExplicitLyricReadings,
 } from "./lyricReadingDictionary";
+import {
+  normalizeDisplayReading,
+  toSpokenReading,
+} from "./readingVariants";
+import { requestElectronData } from "../../api/electron";
 
 declare const kuromoji: any;
 
@@ -15,17 +22,34 @@ const DEBUG_READING_LOGS = false;
 
 const FURIGANA_PROXY_URL =
   "https://lyrikana-furigana-worker.kimchaejun1010.workers.dev";
-const ELECTRON_READING_URL = "http://127.0.0.1:17654";
 const YAHOO_TIMEOUT_MS = 2500;
 const YAHOO_FALLBACK_MAX_LENGTH = 42;
 
-type LocalNetworkRequestInit = RequestInit & {
-  targetAddressSpace?: "loopback" | "local" | "private" | "public";
+export type ReadingContext = {
+  songId?: string;
+  lineNo?: number;
+};
+
+export type ReadingCandidate = {
+  reading: string;
+  spokenReading: string;
+  source: string;
+  score: number;
+  reasons: string[];
+  selected: boolean;
+  surface?: string;
+  spanStart?: number;
+  spanEnd?: number;
 };
 
 export type ReadingResult = {
   reading: string;
+  displayReading: string;
+  spokenReading: string;
   tokens: TokenLite[];
+  candidates: ReadingCandidate[];
+  selectedSource: string;
+  confidence: number;
 };
 
 function katakanaToHiragana(input: string): string {
@@ -109,22 +133,8 @@ function resolveTokenReading(token: any): string {
   const reading = token.reading && token.reading !== "*" ? token.reading : "";
   const pronunciation =
     token.pronunciation && token.pronunciation !== "*" ? token.pronunciation : "";
-  const pos = token.pos ?? "";
 
-  // 조사 가나는 pronunciation 우선
-  if (pos === "助詞") {
-    if (surface === "は" && pronunciation) {
-      return normalizeReadingText(pronunciation);
-    }
-    if (surface === "へ" && pronunciation) {
-      return normalizeReadingText(pronunciation);
-    }
-    if (surface === "を") {
-      return "を";
-    }
-  }
-
-  // 일반 가나 토큰은 원문 유지
+  // 표시용 히라가나는 조사도 원문 표기를 유지한다. 실제 발음은 별도로 만든다.
   if (isKana(surface)) {
     return katakanaToHiragana(surface);
   }
@@ -300,7 +310,9 @@ function buildLocalReadingFromTokens(tokens: TokenLite[]): string {
   return normalizeReadingText(out.join(""));
 }
 
-async function tokenizeAndBuildLocalReading(text: string): Promise<ReadingResult> {
+async function tokenizeAndBuildLocalReading(
+  text: string
+): Promise<{ reading: string; tokens: TokenLite[] }> {
   const tokenizer = await getTokenizer();
   const rawTokens = tokenizer.tokenize(text);
   const tokens = rawTokens.map((token: any) => toTokenLite(token));
@@ -369,23 +381,7 @@ async function postElectronReading<T>(
   path: string,
   payload: unknown
 ): Promise<T | null> {
-  try {
-    const response = await fetch(`${ELECTRON_READING_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      targetAddressSpace: "loopback",
-    } as LocalNetworkRequestInit);
-
-    if (!response.ok) return null;
-
-    const data = (await response.json()) as { ok?: boolean; data?: T };
-    return data.ok ? data.data ?? null : null;
-  } catch {
-    return null;
-  }
+  return requestElectronData<T>(path, payload);
 }
 
 async function getSudachiReading(text: string): Promise<string | null> {
@@ -407,44 +403,178 @@ async function getSudachiReading(text: string): Promise<string | null> {
   return reading || null;
 }
 
+function createReadingCandidate(
+  reading: string,
+  tokens: TokenLite[],
+  source: string,
+  score: number,
+  reasons: string[],
+  selected = false,
+  span?: { surface: string; start: number; end: number }
+): ReadingCandidate {
+  const displayReading = normalizeDisplayReading(
+    normalizeReadingText(reading),
+    tokens
+  );
+  return {
+    reading: displayReading,
+    spokenReading: toSpokenReading(displayReading, tokens),
+    source,
+    score,
+    reasons,
+    selected,
+    ...(span
+      ? {
+          surface: span.surface,
+          spanStart: span.start,
+          spanEnd: span.end,
+        }
+      : {}),
+  };
+}
+
 function saveReadingCandidate(
   original: string,
-  source: string,
-  reading: string,
-  score: number,
-  reasons: string[]
+  candidate: ReadingCandidate,
+  context: ReadingContext
 ): void {
   void postElectronReading("/reading/candidates/save", {
     original,
-    engineVersion: 2,
-    source,
-    reading,
+    engineVersion: 11,
+    songId: context.songId ?? "",
+    lineNo: context.lineNo ?? -1,
+    spanStart: candidate.spanStart ?? -1,
+    spanEnd: candidate.spanEnd ?? -1,
+    source: candidate.source,
+    reading: candidate.reading,
+    spokenReading: candidate.spokenReading,
     kr: "",
     jp: "",
     en: "",
-    score,
-    reasons,
+    score: candidate.score,
+    confidence: candidate.score,
+    reasons: candidate.reasons,
+    selected: candidate.selected,
   });
 }
 
+function saveReadingCandidates(
+  original: string,
+  candidates: ReadingCandidate[],
+  context: ReadingContext
+): void {
+  for (const candidate of candidates) {
+    saveReadingCandidate(original, candidate, context);
+  }
+}
+
+function finalizeReadingResult(
+  original: string,
+  reading: string,
+  tokens: TokenLite[],
+  analyzerCandidates: ReadingCandidate[],
+  selectedSource: string,
+  confidence: number
+): ReadingResult {
+  const dictionaryReading = normalizeDisplayReading(
+    applyLyricContextReadingOverrides(original, normalizeReadingText(reading)),
+    tokens
+  );
+  const lyricResolution = resolveLyricReadingCandidates(
+    original,
+    dictionaryReading
+  );
+  const displayReading = normalizeDisplayReading(
+    lyricResolution.reading,
+    tokens
+  );
+  const effectiveSource = lyricResolution.selected?.source ?? selectedSource;
+  const effectiveConfidence = lyricResolution.selected?.score ?? confidence;
+
+  const lyricCandidates = lyricResolution.candidates.map((candidate) =>
+    createReadingCandidate(
+      candidate.lineReading,
+      tokens,
+      candidate.source,
+      candidate.score,
+      candidate.reasons,
+      candidate.source === effectiveSource &&
+        normalizeDisplayReading(candidate.lineReading, tokens) === displayReading,
+      {
+        surface: candidate.surface,
+        start: candidate.surfaceStart,
+        end: candidate.surfaceEnd,
+      }
+    )
+  );
+
+  const candidates = [...analyzerCandidates, ...lyricCandidates].map(
+    (candidate) => ({
+      ...candidate,
+      selected:
+        candidate.source === effectiveSource &&
+        candidate.reading === displayReading,
+    })
+  );
+
+  if (!candidates.some((candidate) => candidate.selected)) {
+    candidates.push(
+      createReadingCandidate(
+        displayReading,
+        tokens,
+        effectiveSource,
+        effectiveConfidence,
+        ["selected final reading"],
+        true
+      )
+    );
+  }
+
+  return {
+    reading: displayReading,
+    displayReading,
+    spokenReading: toSpokenReading(displayReading, tokens),
+    tokens,
+    candidates,
+    selectedSource: effectiveSource,
+    confidence: effectiveConfidence,
+  };
+}
+
 export async function getLocalJapaneseReadingWithTokens(
-  text: string
+  text: string,
+  _context: ReadingContext = {}
 ): Promise<ReadingResult> {
   const normalized = text.trim();
   if (!normalized) {
-    return { reading: "", tokens: [] };
+    return {
+      reading: "",
+      displayReading: "",
+      spokenReading: "",
+      tokens: [],
+      candidates: [],
+      selectedSource: "empty",
+      confidence: 1,
+    };
   }
 
-  const { tokens, reading } = await tokenizeAndBuildLocalReading(normalized);
-  const finalReading = applyLyricContextReadingOverrides(
-    normalized,
-    normalizeReadingText(reading)
-  );
-
-  return {
-    reading: finalReading,
+  const analysisText = stripExplicitLyricReadings(normalized);
+  const { tokens, reading } = await tokenizeAndBuildLocalReading(analysisText);
+  const localCandidate = createReadingCandidate(
+    reading,
     tokens,
-  };
+    "kuromoji",
+    0.5,
+    ["local morphological analysis"]
+  );
+  return finalizeReadingResult(
+    normalized,
+    reading,
+    tokens,
+    [localCandidate],
+    "kuromoji",
+    0.5
+  );
 }
 
 function isSevereYahooShrink(localReading: string, yahooReading: string): boolean {
@@ -488,29 +618,6 @@ function breaksAiSouCase(original: string, localReading: string, yahooReading: s
       return false;
     }
     return true;
-  }
-
-  return false;
-}
-
-function breaksParticleWaCase(
-  tokens: TokenLite[],
-  localReading: string,
-  yahooReading: string
-): boolean {
-  const local = normalizeReadingText(localReading);
-  const yahoo = normalizeReadingText(yahooReading);
-
-  for (const token of tokens) {
-    if (
-      token.surface === "は" &&
-      token.pos === "助詞" &&
-      token.pronunciation === "ワ"
-    ) {
-      if (local.includes("わ") && !yahoo.includes("わ")) {
-        return true;
-      }
-    }
   }
 
   return false;
@@ -583,7 +690,6 @@ function shouldPreferYahooReading(
 
   if (isSevereYahooShrink(local, yahoo)) return false;
   if (breaksAiSouCase(original, local, yahoo)) return false;
-  if (breaksParticleWaCase(tokens, local, yahoo)) return false;
   if (hasAdjacentSingleKanjiNounSplit(tokens) && local !== yahoo) return true;
 
   if (hasKanji(original) && local !== yahoo) {
@@ -598,50 +704,79 @@ function shouldPreferYahooReading(
   return false;
 }
 
-export async function getJapaneseReading(text: string): Promise<string> {
-  const result = await getJapaneseReadingWithTokens(text);
+export async function getJapaneseReading(
+  text: string,
+  context: ReadingContext = {}
+): Promise<string> {
+  const result = await getJapaneseReadingWithTokens(text, context);
   return result.reading;
 }
 
 export async function getJapaneseReadingWithTokens(
-  text: string
+  text: string,
+  context: ReadingContext = {}
 ): Promise<ReadingResult> {
   const normalized = text.trim();
   if (!normalized) {
-    return { reading: "", tokens: [] };
+    return {
+      reading: "",
+      displayReading: "",
+      spokenReading: "",
+      tokens: [],
+      candidates: [],
+      selectedSource: "empty",
+      confidence: 1,
+    };
   }
 
   const cached = readingCache.get(normalized);
   if (cached) {
+    saveReadingCandidates(normalized, cached.candidates, context);
     return cached;
   }
 
+  const analysisText = stripExplicitLyricReadings(normalized);
   const { tokens, reading: localReading } =
-    await tokenizeAndBuildLocalReading(normalized);
+    await tokenizeAndBuildLocalReading(analysisText);
 
-  let finalReading = localReading;
+  const normalizedLocalReading = normalizeDisplayReading(localReading, tokens);
+  let finalReading = normalizedLocalReading;
+  let selectedSource = "kuromoji";
+  let confidence = 0.5;
+  const analyzerCandidates: ReadingCandidate[] = [
+    createReadingCandidate(
+      normalizedLocalReading,
+      tokens,
+      "kuromoji",
+      0.5,
+      ["local morphological analysis"]
+    ),
+  ];
 
   const fallbackDecision = shouldTryYahooFallback(
-    normalized,
-    localReading,
+    analysisText,
+    normalizedLocalReading,
     tokens
   );
 
   if (fallbackDecision.shouldTry) {
     if (DEBUG_READING_LOGS) {
-      console.log("[LyriKana] special reading fallback:", {
-        original: normalized,
-        localReading,
-        reasons: fallbackDecision.reasons,
-      });
-    }
+        console.log("[LyriKana] special reading fallback:", {
+          original: normalized,
+          localReading: normalizedLocalReading,
+          reasons: fallbackDecision.reasons,
+        });
+      }
 
-    const sudachiReading = await getSudachiReading(normalized);
+    const rawSudachiReading = await getSudachiReading(analysisText);
+    const sudachiReading = rawSudachiReading
+      ? normalizeDisplayReading(rawSudachiReading, tokens)
+      : null;
 
     if (sudachiReading) {
       const useSudachi = shouldPreferYahooReading(
-        normalized,
-        localReading,
+        analysisText,
+        normalizedLocalReading,
         sudachiReading,
         tokens
       );
@@ -649,30 +784,37 @@ export async function getJapaneseReadingWithTokens(
       if (DEBUG_READING_LOGS) {
         console.log("[LyriKana] Sudachi comparison:", {
           original: normalized,
-          localReading,
+          localReading: normalizedLocalReading,
           sudachiReading,
           useSudachi,
         });
       }
 
-      saveReadingCandidate(
-        normalized,
+      analyzerCandidates.push(
+        createReadingCandidate(
+          sudachiReading,
+          tokens,
         "sudachi",
-        sudachiReading,
-        useSudachi ? 10 : 0.5,
-        fallbackDecision.reasons
+          useSudachi ? 0.65 : 0.35,
+          fallbackDecision.reasons
+        )
       );
 
       if (useSudachi) {
         finalReading = sudachiReading;
+        selectedSource = "sudachi";
+        confidence = 0.65;
       }
     }
 
-    const yahooReading = await getYahooReading(normalized);
+    const rawYahooReading = await getYahooReading(analysisText);
+    const yahooReading = rawYahooReading
+      ? normalizeDisplayReading(rawYahooReading, tokens)
+      : null;
 
     if (yahooReading) {
       const useYahoo = shouldPreferYahooReading(
-        normalized,
+        analysisText,
         finalReading,
         yahooReading,
         tokens
@@ -687,27 +829,43 @@ export async function getJapaneseReadingWithTokens(
         });
       }
 
-      finalReading = useYahoo ? yahooReading : localReading;
+      analyzerCandidates.push(
+        createReadingCandidate(
+          yahooReading,
+          tokens,
+          "yahoo",
+          useYahoo ? 0.65 : 0.35,
+          fallbackDecision.reasons
+        )
+      );
+
+      if (useYahoo) {
+        finalReading = yahooReading;
+        selectedSource = "yahoo";
+        confidence = 0.65;
+      }
     }
   }
 
-  finalReading = applyLyricContextReadingOverrides(
+  const result = finalizeReadingResult(
     normalized,
-    normalizeReadingText(finalReading)
+    finalReading,
+    tokens,
+    analyzerCandidates,
+    selectedSource,
+    confidence
   );
 
-  const result = {
-    reading: finalReading,
-    tokens,
-  };
-
   readingCache.set(normalized, result);
+  saveReadingCandidates(normalized, result.candidates, context);
 
   if (DEBUG_READING_LOGS) {
     console.log("[LyriKana] final reading:", {
       original: normalized,
-      localReading,
-      finalReading,
+      localReading: normalizedLocalReading,
+      displayReading: result.displayReading,
+      spokenReading: result.spokenReading,
+      selectedSource: result.selectedSource,
     });
   }
 

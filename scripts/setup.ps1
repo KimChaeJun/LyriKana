@@ -30,6 +30,9 @@ foreach ($directory in @("Extension", "ElectronOverlay", "lyrikana-data-core")) 
     }
 }
 
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "register-native-host.ps1")
+if ($LASTEXITCODE -ne 0) { throw "Failed to register the LyriKana Native Host." }
+
 Push-Location $backendRoot
 try {
     & $venvPython -c "from app.database import init_database; init_database(); print('[LyriKana] Database ready')"

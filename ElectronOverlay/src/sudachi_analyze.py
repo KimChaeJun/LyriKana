@@ -35,7 +35,13 @@ def main() -> None:
     for morpheme in morphemes:
         surface = morpheme.surface()
         reading = morpheme.reading_form()
+        part_of_speech = morpheme.part_of_speech()
         if not reading or reading == "*":
+            reading = surface
+
+        # Sudachi returns キゴウ as the reading_form for whitespace tokens.
+        # It is a token category label, not something that should be pronounced.
+        if surface.isspace() or (reading == "キゴウ" and surface != "記号"):
             reading = surface
 
         hiragana = katakana_to_hiragana(reading)
@@ -46,7 +52,7 @@ def main() -> None:
                 "reading": hiragana,
                 "normalized": morpheme.normalized_form(),
                 "dictionary": morpheme.dictionary_form(),
-                "partOfSpeech": morpheme.part_of_speech(),
+                "partOfSpeech": part_of_speech,
             }
         )
 

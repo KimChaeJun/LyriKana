@@ -13,6 +13,8 @@ LyriKana detects the track playing in YouTube Music and displays synchronized ly
 - Japanese reading conversion using kuromoji, the existing exception rules, and optional Sudachi analysis
 - Concurrent Korean pronunciation and romaji display
 - Manifest V3 Chrome Extension and Electron always-on-top overlay
+- Automatic FastAPI and Electron launch through Windows Native Messaging when YouTube Music opens
+- Automatic overlay hide after the last YouTube Music tab/PWA closes, with restore on reopen
 - Request cancellation and stale response protection on track changes
 - Per-line conversion persistence with partial-failure progress
 - One-command VSCode development environment
@@ -60,6 +62,7 @@ The same environment is available through `LyriKana: Start All`.
 - `LyriKana: Electron Overlay`
 - `LyriKana: Start All`
 - `LyriKana: Install Dependencies`
+- `LyriKana: Register Native Host`
 - `LyriKana: Build Extension`
 - `LyriKana: Run Tests`
 
@@ -70,7 +73,11 @@ The same environment is available through `LyriKana: Start All`.
 3. Choose **Load unpacked** and select `Extension/dist`.
 4. Reload the Extension after watcher rebuilds when Chrome requires it.
 
-The manifest permits YouTube Music, FastAPI on `127.0.0.1:8000`, Electron on `127.0.0.1:17654`, and the existing furigana Worker. LRCLIB host permission is no longer needed.
+`LyriKana: Install Dependencies` also registers the Windows Native Messaging host for Chrome, Edge, and Chromium. On an existing setup, run `LyriKana: Register Native Host` once. When applying this change for the first time, remove the previously loaded unpacked Extension and load `Extension/dist` again so the fixed manifest key takes effect. The development Extension ID is fixed at `ngdhgdbmndejbjcbglonhpgpflccnfdj`.
+
+Opening the YouTube Music site or installed PWA in a browser with the Extension checks both FastAPI and Electron. The Native Host starts the backend first, waits for `/health`, and then starts Electron; if only one service is missing, it starts only that service. The Extension counts every YouTube Music tab and PWA window in the same browser, keeps the overlay visible while at least one remains, and hides it only after the last one closes. Reopening YouTube Music restores the existing overlay. Health checks and Electron's single-instance lock prevent duplicate processes and windows. Standalone desktop clients without browser-extension support cannot trigger this path. Auto-launch currently supports Windows; hiding the overlay does not terminate the backend or Electron process.
+
+The manifest permits YouTube Music, FastAPI on `127.0.0.1:8000`, Electron on `127.0.0.1:17654`, the existing furigana Worker, and local Native Messaging. LRCLIB host permission is no longer needed.
 
 ## Environment
 
@@ -89,7 +96,7 @@ VITE_BACKEND_URL=http://127.0.0.1:8000
 LYRIKANA_BACKEND_URL=http://127.0.0.1:8000
 ```
 
-Chrome Extension origins are handled by a constrained FastAPI CORS regex. Do not put secrets in Extension environment values.
+FastAPI permits the fixed YouTube Music origin, configured local development origins, Chrome Extension origins, and loopback Private Network preflights. Other regular web origins remain blocked. Do not put secrets in Extension environment values.
 
 ## Database and processing
 
@@ -133,6 +140,7 @@ This verifies the FastAPI/SQLite flow, normalization, deduplication, LRC parsing
 - Proper nouns and unusual lyrics can still require pronunciation corrections.
 - The task registry targets the current single-process development deployment; introduce a durable queue only when multi-process deployment requires it.
 - Chrome local-network policy changes may require permission approval or an Extension reload.
+- Auto-launch requires Windows Native Host registration and an Extension reload.
 
 ## Next steps
 

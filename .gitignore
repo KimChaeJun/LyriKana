@@ -27,6 +27,7 @@ pnpm-debug.log*
 *.db-shm
 *.db-wal
 ElectronOverlay/.tmp-test-user-data/
+native-host/bin/
 
 # Python
 __pycache__/

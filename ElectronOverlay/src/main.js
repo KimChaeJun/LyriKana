@@ -13,6 +13,7 @@ const {
 const { analyzeWithSudachi } = require("./sudachi");
 
 const PORT = 17654;
+const LIFECYCLE_HIDE_GRACE_MS = 750;
 const BACKEND_URL = (process.env.LYRIKANA_BACKEND_URL || "http://127.0.0.1:8000").replace(
   /\/$/,
   ""
@@ -22,6 +23,8 @@ let server = null;
 let clickThrough = false;
 let playerCommandQueue = [];
 let latestSettings = null;
+let lifecycleHideTimer = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function enqueuePlayerCommand(command) {
   const allowedCommands = new Set(["play-pause", "next", "previous"]);
@@ -111,6 +114,30 @@ function toggleClickThrough() {
   setClickThrough(!clickThrough);
 }
 
+function setYouTubeMusicActive(active) {
+  if (!active) {
+    if (lifecycleHideTimer) return;
+    lifecycleHideTimer = setTimeout(() => {
+      lifecycleHideTimer = null;
+      overlayWindow?.hide();
+    }, LIFECYCLE_HIDE_GRACE_MS);
+    return;
+  }
+
+  if (lifecycleHideTimer) {
+    clearTimeout(lifecycleHideTimer);
+    lifecycleHideTimer = null;
+  }
+
+  if (!overlayWindow) {
+    createOverlayWindow();
+    return;
+  }
+
+  if (overlayWindow.isMinimized()) overlayWindow.restore();
+  overlayWindow.showInactive();
+}
+
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -178,7 +205,10 @@ function startServer() {
     }
 
     if (request.method === "GET" && request.url === "/health") {
-      writeJson(response, 200, { status: "ok" });
+      writeJson(response, 200, {
+        status: "ok",
+        overlayVisible: Boolean(overlayWindow?.isVisible()),
+      });
       return;
     }
 
@@ -190,6 +220,16 @@ function startServer() {
     try {
       const body = await readRequestBody(request);
       const payload = body ? JSON.parse(body) : {};
+
+      if (request.url === "/lifecycle") {
+        setYouTubeMusicActive(Boolean(payload.active));
+        writeJson(response, 200, {
+          ok: true,
+          active: Boolean(payload.active),
+          overlayVisible: Boolean(overlayWindow?.isVisible()),
+        });
+        return;
+      }
 
       if (request.url === "/overlay") {
         sendToOverlay("overlay:update", mergeWithLatestSettings(payload));
@@ -292,6 +332,19 @@ function startServer() {
   });
 }
 
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+app.on("second-instance", () => {
+  if (!overlayWindow) {
+    createOverlayWindow();
+    return;
+  }
+  if (overlayWindow.isMinimized()) overlayWindow.restore();
+  overlayWindow.show();
+  overlayWindow.focus();
+});
+
 app.whenReady().then(() => {
   initDatabase(app);
   createOverlayWindow();
@@ -323,6 +376,7 @@ ipcMain.on("player:command", (_event, command) => {
 });
 
 app.on("before-quit", () => {
+  if (lifecycleHideTimer) clearTimeout(lifecycleHideTimer);
   globalShortcut.unregisterAll();
   server?.close();
   closeDatabase();
@@ -333,3 +387,4 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+}

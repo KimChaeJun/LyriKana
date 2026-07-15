@@ -94,6 +94,19 @@
       "problemMatcher": []
     },
     {
+      "label": "LyriKana: Register Native Host",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\register-native-host.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "LyriKana: Build Extension",
       "type": "npm",
       "script": "build",

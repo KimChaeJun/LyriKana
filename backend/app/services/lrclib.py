@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -10,6 +11,46 @@ from app.services.normalization import normalize_song_part
 
 
 logger = logging.getLogger(__name__)
+LRCLIB_MAX_ATTEMPTS = 3
+LRCLIB_RETRY_BASE_SECONDS = 0.4
+RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+
+
+async def _get_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, str | int],
+) -> httpx.Response:
+    for attempt in range(1, LRCLIB_MAX_ATTEMPTS + 1):
+        try:
+            response = await client.get(url, params=params)
+        except (httpx.TimeoutException, httpx.TransportError):
+            if attempt >= LRCLIB_MAX_ATTEMPTS:
+                raise
+            delay = LRCLIB_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "LRCLIB request failed transiently attempt=%d/%d retry_in=%.1fs",
+                attempt,
+                LRCLIB_MAX_ATTEMPTS,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code not in RETRYABLE_STATUS_CODES or attempt >= LRCLIB_MAX_ATTEMPTS:
+            return response
+
+        delay = LRCLIB_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+        logger.warning(
+            "LRCLIB HTTP retry status=%d attempt=%d/%d retry_in=%.1fs",
+            response.status_code,
+            attempt,
+            LRCLIB_MAX_ATTEMPTS,
+            delay,
+        )
+        await asyncio.sleep(delay)
+
+    raise RuntimeError("LRCLIB retry loop ended unexpectedly")
 
 
 def _score_candidate(
@@ -33,6 +74,11 @@ def _score_candidate(
     normalized_artist = normalize_song_part(artist)
     if normalized_artist and candidate_artist == normalized_artist:
         score += 180
+    elif normalized_artist and candidate_artist.startswith(normalized_artist):
+        # LRCLIB sometimes appends annotations such as play counts to the
+        # artist. Prefer that over candidates where the requested artist only
+        # appears after unrelated text (for example "Song, Artist").
+        score += 140
     elif normalized_artist and normalized_artist in candidate_artist:
         score += 70
 
@@ -65,7 +111,7 @@ async def fetch_best_lrclib_lyrics(
         timeout=settings.lrclib_timeout_seconds,
         headers=headers,
     ) as client:
-        response = await client.get(url, params=params)
+        response = await _get_with_retry(client, url, params)
 
     if response.status_code == 404:
         return None

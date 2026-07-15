@@ -9,6 +9,7 @@ const DEBUG_READING_LOGS = false;
 export type BaseLyricLine = {
   time: number;
   original: string;
+  lineNo?: number;
   reading: string;
   kr: string;
   jp: string;
@@ -22,6 +23,7 @@ export type LrcSyncMarker = {
 export type BackgroundBuildOptions = {
   concurrency?: number;
   buildMode?: "fast" | "precise";
+  songId?: string;
   indices?: number[];
   shouldStop?: () => boolean;
   onLine?: (index: number, line: LyricLine) => void;
@@ -30,6 +32,8 @@ export type BackgroundBuildOptions = {
 
 function applyParsedLineSafetyFixes(line: LyricLine): LyricLine {
   let reading = line.reading;
+  let displayReading = line.displayReading ?? line.reading;
+  let spokenReading = line.spokenReading ?? line.reading;
   let kr = line.kr;
   let jp = line.jp;
   let en = line.en;
@@ -37,6 +41,12 @@ function applyParsedLineSafetyFixes(line: LyricLine): LyricLine {
   // 최종 안전망: 埃を被って -> かぶって 로 보정
   if (line.original.includes("埃を被って")) {
     reading = reading
+      .replace(/こうむって/g, "かぶって")
+      .replace(/コウムッテ/g, "カブッテ");
+    displayReading = displayReading
+      .replace(/こうむって/g, "かぶって")
+      .replace(/コウムッテ/g, "カブッテ");
+    spokenReading = spokenReading
       .replace(/こうむって/g, "かぶって")
       .replace(/コウムッテ/g, "カブッテ");
 
@@ -56,6 +66,8 @@ function applyParsedLineSafetyFixes(line: LyricLine): LyricLine {
   return {
     ...line,
     reading,
+    displayReading,
+    spokenReading,
     kr,
     jp,
     en,
@@ -116,6 +128,7 @@ export async function enrichLyricsInBackground(
   const {
     concurrency = 3,
     buildMode = "precise",
+    songId,
     indices,
     shouldStop = () => false,
     onLine,
@@ -141,7 +154,10 @@ export async function enrichLyricsInBackground(
       const seed = baseLines[lineIndex];
 
       try {
-        const built = await build(seed.time, seed.original);
+        const built = await build(seed.time, seed.original, {
+          songId,
+          lineNo: seed.lineNo ?? lineIndex,
+        });
         if (shouldStop()) return;
 
         const fixedLine = applyParsedLineSafetyFixes({

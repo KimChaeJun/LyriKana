@@ -37,6 +37,7 @@ def create_app(*, initialize_database: bool = True) -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        allow_private_network=True,
     )
     application.include_router(router)
     application.include_router(legacy_router)

@@ -58,7 +58,14 @@ def _migrate_song_info_columns() -> None:
             if name not in existing:
                 connection.execute(text(f"ALTER TABLE song_info ADD COLUMN {name} {definition}"))
 
-        rows = connection.execute(text("SELECT id, title, artist FROM song_info")).mappings()
+        rows = connection.execute(
+            text(
+                "SELECT id, title, artist FROM song_info "
+                "WHERE normalized_title IS NULL OR normalized_title = '' "
+                "OR normalized_artist IS NULL "
+                "OR (COALESCE(artist, '') != '' AND normalized_artist = '')"
+            )
+        ).mappings()
         for row in rows:
             from app.services.normalization import normalize_song_part
 

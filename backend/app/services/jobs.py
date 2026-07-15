@@ -5,6 +5,7 @@ import json
 import logging
 import time
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +18,21 @@ from app.services.normalization import make_song_id, normalize_song_part
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable_provider_failure(error_message: str | None) -> bool:
+    if not error_message:
+        return False
+    return error_message in {
+        "provider_timeout",
+        "provider_unavailable",
+        "provider_error:ReadTimeout",
+        "provider_error:ConnectTimeout",
+        "provider_error:ConnectError",
+        "provider_http_408",
+        "provider_http_425",
+        "provider_http_429",
+    } or error_message.startswith("provider_http_5")
 
 
 class SongProcessor:
@@ -35,6 +51,7 @@ class SongProcessor:
     ) -> tuple[SongInfo, bool]:
         normalized_title = normalize_song_part(title)
         normalized_artist = normalize_song_part(artist)
+        requested_id = make_song_id(title, artist)
         song = db.scalar(
             select(SongInfo).where(
                 SongInfo.normalized_title == normalized_title,
@@ -44,8 +61,28 @@ class SongProcessor:
         created = False
 
         if song is None:
+            # Provider metadata used to overwrite the canonical title/artist.
+            # A later startup then backfilled the mutated normalized fields while
+            # the primary key still represented the original YouTube identity.
+            # Recover that cached row by its stable ID instead of inserting a
+            # duplicate and raising a primary-key conflict.
+            song = db.get(SongInfo, requested_id)
+            if song is not None:
+                song.title = title.strip()
+                song.artist = artist.strip() if artist else None
+                song.normalized_title = normalized_title
+                song.normalized_artist = normalized_artist
+                db.commit()
+                logger.warning(
+                    "Repaired provider-mutated song identity song_id=%s title=%r artist=%r",
+                    song.id,
+                    song.title,
+                    song.artist,
+                )
+
+        if song is None:
             song = SongInfo(
-                id=make_song_id(title, artist),
+                id=requested_id,
                 title=title.strip(),
                 artist=artist.strip() if artist else None,
                 normalized_title=normalized_title,
@@ -68,8 +105,18 @@ class SongProcessor:
                     )
                 )
                 if song is None:
+                    song = db.get(SongInfo, requested_id)
+                    if song is not None:
+                        song.title = title.strip()
+                        song.artist = artist.strip() if artist else None
+                        song.normalized_title = normalized_title
+                        song.normalized_artist = normalized_artist
+                        db.commit()
+                if song is None:
                     raise
-        elif retry and song.status == "failed":
+        elif song.status == "failed" and (
+            retry or _is_retryable_provider_failure(song.error_message)
+        ):
             song.status = "pending"
             song.error_message = None
             song.progress_total = 0
@@ -88,6 +135,10 @@ class SongProcessor:
     def start_if_needed(self, song_id: str, status: str) -> None:
         current = self._tasks.get(song_id)
         if current is not None and not current.done():
+            if status == "pending":
+                current.add_done_callback(
+                    lambda _completed, key=song_id: self.start_if_needed(key, "pending")
+                )
             return
         if status not in {"pending", "fetching"}:
             return
@@ -138,8 +189,9 @@ class SongProcessor:
                         line_payload = {**line, "reason_tags": json.dumps([])}
                         db.add(Lyric(song_id=song_id, **line_payload))
 
-                song.title = fetched.get("trackName") or song.title
-                song.artist = fetched.get("artistName") or song.artist
+                # LRCLIB metadata describes a search candidate, not the stable
+                # YouTube Music identity used for cache keys. Keep the original
+                # request title/artist so future lookups cannot drift.
                 song.album = fetched.get("albumName") or song.album
                 fetched_duration = fetched.get("duration")
                 song.duration = round(fetched_duration) if fetched_duration else song.duration
@@ -159,6 +211,18 @@ class SongProcessor:
             )
         except asyncio.CancelledError:
             raise
+        except httpx.TimeoutException:
+            logger.exception("Song provider timed out song_id=%s", song_id)
+            self._mark_failed(song_id, "provider_timeout")
+        except httpx.TransportError:
+            logger.exception("Song provider unavailable song_id=%s", song_id)
+            self._mark_failed(song_id, "provider_unavailable")
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code
+            logger.exception(
+                "Song provider HTTP error song_id=%s status=%d", song_id, status_code
+            )
+            self._mark_failed(song_id, f"provider_http_{status_code}")
         except Exception as error:
             logger.exception("Song processing failed song_id=%s", song_id)
             self._mark_failed(song_id, f"provider_error:{type(error).__name__}")

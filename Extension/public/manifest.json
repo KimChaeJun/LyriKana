@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "LyriKana",
   "version": "0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1DE2/jv9NjSU2eJdAlFn2shFhS2PQnNSzGUzBHLWOOFXIKHk4mrtnqEsB0WjD7m73PsOKQTwwdMib8bR8QFPHtrf89TJJczMbBmzRmzDPMpfuCPBfEMDY1PYEID/Jm8uYnVV310mvQBw67CykpuHMw65CEYhdqLBxf8ZSr0c+2/H3J7f6XndpU5PZxm02QhcphZAsa976QBQGSgATvq5m7XjKzImqWWppCaSz73K2XrWQ7aNQxI7Y0n+foQ9Jr7MCgVsMotpUD6IBMhZ14iHwSBPTtFDszl4etgV1cOn2WZxFHOpKeYzpvCJahhr8uNXO+H7zkWXMewSTpJ0eK1zLwIDAQAB",
   "description": "YouTube Music lyrics and pronunciation helper",
-  "permissions": ["activeTab", "scripting", "storage", "windows"],
+  "permissions": ["activeTab", "nativeMessaging", "scripting", "storage", "windows"],
   "action": {
     "default_title": "LyriKana",
     "default_popup": "popup/index.html"
@@ -20,7 +21,14 @@
   "content_scripts": [
     {
       "matches": ["https://music.youtube.com/*"],
-      "js": ["vendor/kuromoji.js", "content.js"]
+      "js": ["pagePlaybackBridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["vendor/kuromoji.js", "content.js"],
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [

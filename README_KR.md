@@ -13,6 +13,8 @@ LyriKana는 YouTube Music에서 재생 중인 곡을 감지하고, 싱크 가사
 - kuromoji, 기존 예외 규칙, Sudachi 보조 분석을 이용한 일본어 읽기 변환
 - 한글 발음과 로마자 발음 동시 표시
 - Chrome Extension Overlay 및 Electron always-on-top 오버레이
+- YouTube Music 접속 시 Windows Native Messaging을 통한 FastAPI와 Electron 자동 실행
+- 마지막 YouTube Music 탭/PWA 종료 시 오버레이 자동 숨김 및 재오픈 시 복원
 - 곡 변경 시 이전 요청 취소, 요청 키 검증, 제한된 지수형 polling
 - 라인 단위 변환 결과와 부분 실패 상태 저장
 - VSCode F5 또는 단일 Task로 전체 개발환경 실행
@@ -66,6 +68,7 @@ Electron은 백엔드 준비가 늦어져도 종료되지 않고 재연결 가�
 - `LyriKana: Electron Overlay`
 - `LyriKana: Start All`
 - `LyriKana: Install Dependencies`
+- `LyriKana: Register Native Host`
 - `LyriKana: Build Extension`
 - `LyriKana: Run Tests`
 
@@ -77,7 +80,11 @@ Electron은 백엔드 준비가 늦어져도 종료되지 않고 재연결 가�
 4. `Extension/dist`를 지정합니다.
 5. watch 빌드 후 변경 사항을 적용하려면 확장 프로그램을 새로고침합니다.
 
-Manifest에는 YouTube Music, FastAPI `127.0.0.1:8000`, Electron `127.0.0.1:17654`, 기존 후리가나 Worker 권한만 포함됩니다. LRCLIB host 권한은 백엔드로 이동했기 때문에 필요하지 않습니다.
+`LyriKana: Install Dependencies`는 Chrome/Edge/Chromium용 Windows Native Host도 함께 등록합니다. 이미 의존성을 설치한 환경에서는 `LyriKana: Register Native Host`를 한 번 실행하면 됩니다. 이 변경을 처음 적용할 때는 manifest의 고정 키가 반영되도록 기존 unpacked Extension을 제거한 뒤 `Extension/dist`를 다시 로드하세요. 개발용 Extension ID는 `ngdhgdbmndejbjcbglonhpgpflccnfdj`로 고정됩니다.
+
+Extension이 설치된 Chrome/Edge에서 YouTube Music 사이트 또는 설치형 PWA를 열면 FastAPI와 Electron 상태를 함께 확인합니다. Native Host는 백엔드를 먼저 시작해 `/health` 준비를 확인한 뒤 Electron을 시작합니다. 둘 중 하나만 실행 중인 경우에는 누락된 서비스만 시작합니다. Extension은 같은 브라우저의 모든 YouTube Music 탭과 PWA 창을 집계하므로 하나라도 남아 있으면 오버레이를 유지하고, 마지막 항목이 닫힐 때만 숨깁니다. 다시 열면 실행 중인 Electron을 재사용해 오버레이를 표시합니다. 여러 탭이 동시에 열리거나 F5로 이미 실행한 경우에는 health check와 Electron의 single-instance 잠금이 중복 프로세스와 창을 막습니다. 브라우저 확장을 지원하지 않는 별도의 데스크톱 앱은 이 자동 실행 경로를 사용할 수 없습니다. 자동 실행은 현재 Windows만 지원하며, 마지막 탭을 닫아도 백엔드와 Electron 프로세스 자체는 자동 종료하지 않습니다.
+
+Manifest에는 YouTube Music, FastAPI `127.0.0.1:8000`, Electron `127.0.0.1:17654`, 기존 후리가나 Worker 및 로컬 Native Messaging 권한만 포함됩니다. LRCLIB host 권한은 백엔드로 이동했기 때문에 필요하지 않습니다.
 
 ## 환경변수
 
@@ -96,7 +103,7 @@ VITE_BACKEND_URL=http://127.0.0.1:8000
 LYRIKANA_BACKEND_URL=http://127.0.0.1:8000
 ```
 
-Chrome Extension origin은 FastAPI의 안전한 정규식 CORS 규칙으로 허용됩니다. 민감한 API 키는 Extension에 포함하지 마세요.
+FastAPI는 고정된 YouTube Music origin, 설정된 로컬 개발 origin, Chrome Extension origin과 loopback Private Network preflight만 허용합니다. 다른 일반 웹 origin은 차단됩니다. 민감한 API 키는 Extension에 포함하지 마세요.
 
 ## DB 구조와 처리 흐름
 
@@ -147,6 +154,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1
 - 발음 변환은 기존 예외 규칙을 보존하지만 고유명사와 특수 가사는 추가 교정이 필요할 수 있습니다.
 - 작업 registry는 개발용 단일 프로세스 구조입니다. 다중 서버 프로세스가 필요해질 때만 별도 queue 도입을 검토합니다.
 - Chrome의 local network 정책에 따라 새 권한 승인 또는 Extension 재로드가 필요할 수 있습니다.
+- 자동 실행을 사용하려면 Windows에서 Native Host 등록과 Extension 재로드가 필요합니다.
 
 ## 다음 개발 계획
 
