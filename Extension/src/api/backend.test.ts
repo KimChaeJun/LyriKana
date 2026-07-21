@@ -63,6 +63,7 @@ describe("backend API client", () => {
       artist: "Artist",
       duration: 180,
       playbackTime: 12.5,
+      videoId: "video-123",
     });
 
     expect(result.status).toBe("processing");
@@ -73,6 +74,7 @@ describe("backend API client", () => {
       title: "Song",
       duration: 180,
       playbackTime: 12.5,
+      videoId: "video-123",
     });
   });
 

@@ -16,6 +16,10 @@ function isKana(text: string): boolean {
   return /^[ぁ-んァ-ヶー]+$/.test(text);
 }
 
+function isBoundarySurface(text: string): boolean {
+  return /^[\p{P}\p{S}\s]+$/u.test(text);
+}
+
 function lastIndexOfBefore(
   text: string,
   searchValues: string[],
@@ -44,15 +48,24 @@ function rewriteParticleReadings(
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index];
     const surface = katakanaToHiragana(token.surface ?? "");
-    if (!surface || !isKana(surface)) continue;
+    if (!surface) continue;
 
     const isPronouncedParticle =
       token.pos === "助詞" && surface in PARTICLE_SPOKEN_READING;
-    const tokenPronunciation = katakanaToHiragana(token.pronunciation ?? "");
+    const tokenReading = katakanaToHiragana(
+      token.reading && token.reading !== "*" ? token.reading : ""
+    );
+    const tokenPronunciation = katakanaToHiragana(
+      token.pronunciation && token.pronunciation !== "*"
+        ? token.pronunciation
+        : ""
+    );
     const spoken = PARTICLE_SPOKEN_READING[surface];
     const searchValues = isPronouncedParticle
       ? [...new Set([surface, spoken, tokenPronunciation])]
-      : [surface];
+      : isKana(surface) || isBoundarySurface(surface)
+        ? [surface]
+        : [...new Set([tokenReading, tokenPronunciation])];
     const match = lastIndexOfBefore(rewritten, searchValues, cursor);
     if (!match) continue;
 
@@ -105,7 +118,13 @@ export function toSpokenReading(
     const spokenParticle = PARTICLE_SPOKEN_READING[surface];
     const searchValues = isPronouncedParticle
       ? [...new Set([surface, spokenParticle, tokenReading, tokenPronunciation])]
-      : [...new Set([tokenReading, tokenPronunciation])];
+      : [
+          ...new Set([
+            tokenReading,
+            tokenPronunciation,
+            ...(isBoundarySurface(surface) ? [surface] : []),
+          ]),
+        ];
     const match = lastIndexOfBefore(rewritten, searchValues, cursor);
     if (!match) continue;
 

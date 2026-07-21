@@ -59,6 +59,9 @@ lyrikana-data-core/data/generated/
 
 # LyriKana Backend
 backend/.venv/
+backend/.venv-analysis/
+backend/.analysis-data/
+backend/.analysis-tools/
 backend/*.db
 backend/*.sqlite3
 backend/.env

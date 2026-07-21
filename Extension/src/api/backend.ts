@@ -2,6 +2,15 @@ export type ProcessingStatus =
   | "pending"
   | "fetching"
   | "processing"
+  | "awaiting_alignment"
+  | "awaiting_audio"
+  | "awaiting_lyrics"
+  | "analysis_queued"
+  | "analysis_running"
+  | "analysis_failed"
+  | "aligning"
+  | "review"
+  | "review_required"
   | "completed"
   | "partial"
   | "failed";
@@ -9,22 +18,33 @@ export type ProcessingStatus =
 export type BackendLyricLine = {
   lineNo: number;
   time: number | null;
+  endTime?: number | null;
   original: string;
   reading: string | null;
+  sungReading?: string | null;
   kr: string | null;
   jp: string | null;
   en: string | null;
   userEdit: boolean;
+  confidence?: number | null;
+  source?: string;
   reasonTags: string[];
 };
 
 export type BackendSongResponse = {
   song: {
     id: string;
+    recordingId?: string;
+    workId?: string | null;
     title: string;
     artist: string | null;
+    performer?: string | null;
     album: string | null;
     duration: number | null;
+    provider?: string;
+    videoId?: string | null;
+    recordingKey?: string | null;
+    versionType?: string;
     source: string;
   };
   status: ProcessingStatus;
@@ -137,7 +157,8 @@ async function requestJson<T>(
   return relayed.payload as T;
 }
 
-export function createSongKey(title: string, artist?: string): string {
+export function createSongKey(title: string, artist?: string, videoId?: string): string {
+  if (videoId?.trim()) return `youtube_music:${videoId.trim()}`;
   const normalize = (value: string) =>
     value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
   return `${normalize(title)}::${normalize(artist || "")}`;
@@ -171,6 +192,9 @@ export async function resolveLyrics(
     album?: string;
     duration?: number;
     playbackTime?: number;
+    videoId?: string;
+    provider?: string;
+    versionType?: "studio" | "live" | "cover" | "remix" | "unknown";
   },
   signal?: AbortSignal,
   onInitialResolve?: InitialResolveListener

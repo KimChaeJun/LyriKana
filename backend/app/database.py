@@ -44,6 +44,13 @@ def _migrate_song_info_columns() -> None:
     additions = {
         "normalized_title": "VARCHAR(255)",
         "normalized_artist": "VARCHAR(255) DEFAULT ''",
+        "work_id": "VARCHAR(64)",
+        "recording_key": "VARCHAR(320)",
+        "provider": "VARCHAR(50) NOT NULL DEFAULT 'youtube_music'",
+        "provider_recording_id": "VARCHAR(255)",
+        "performer": "VARCHAR(255)",
+        "version_type": "VARCHAR(30) NOT NULL DEFAULT 'unknown'",
+        "audio_fingerprint": "VARCHAR(255)",
         "status": "VARCHAR(30) NOT NULL DEFAULT 'pending'",
         "progress_total": "INTEGER NOT NULL DEFAULT 0",
         "progress_completed": "INTEGER NOT NULL DEFAULT 0",
@@ -81,15 +88,213 @@ def _migrate_song_info_columns() -> None:
                 },
             )
 
-        try:
+    _rebuild_legacy_song_info_identity()
+
+
+def _rebuild_legacy_song_info_identity() -> None:
+    """Remove the old title/artist uniqueness constraint without losing lyric FKs."""
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.connect() as connection:
+        table_sql = connection.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='table' AND name='song_info'")
+        ).scalar_one_or_none()
+    normalized_sql = " ".join((table_sql or "").lower().replace('"', "").split())
+    has_legacy_constraint = (
+        "uq_song_info_identity" in normalized_sql
+        or "unique (normalized_title, normalized_artist)" in normalized_sql
+        or "unique(normalized_title, normalized_artist)" in normalized_sql
+    )
+    if not has_legacy_constraint:
+        return
+
+    raw_connection = engine.raw_connection()
+    cursor = raw_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=OFF")
+        cursor.execute("BEGIN")
+        cursor.execute("DROP TABLE IF EXISTS song_info_recording_migration")
+        cursor.execute(
+            """
+            CREATE TABLE song_info_recording_migration (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                artist VARCHAR(255),
+                normalized_title VARCHAR(255) NOT NULL,
+                normalized_artist VARCHAR(255) NOT NULL DEFAULT '',
+                work_id VARCHAR(64),
+                recording_key VARCHAR(320),
+                provider VARCHAR(50) NOT NULL DEFAULT 'youtube_music',
+                provider_recording_id VARCHAR(255),
+                performer VARCHAR(255),
+                version_type VARCHAR(30) NOT NULL DEFAULT 'unknown',
+                audio_fingerprint VARCHAR(255),
+                album VARCHAR(255),
+                duration INTEGER,
+                source VARCHAR(50) NOT NULL DEFAULT 'youtube_music',
+                raw_lrc TEXT,
+                status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                progress_completed INTEGER NOT NULL DEFAULT 0,
+                progress_failed INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_song_info_recording_key UNIQUE (recording_key),
+                FOREIGN KEY(work_id) REFERENCES works(id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO song_info_recording_migration (
+                id, title, artist, normalized_title, normalized_artist,
+                work_id, recording_key, provider, provider_recording_id,
+                performer, version_type, audio_fingerprint, album, duration,
+                source, raw_lrc, status, progress_total, progress_completed,
+                progress_failed, error_message, created_at, updated_at
+            )
+            SELECT
+                id, title, artist, normalized_title, normalized_artist,
+                work_id, recording_key, provider, provider_recording_id,
+                performer, version_type, audio_fingerprint, album, duration,
+                source, raw_lrc, status, progress_total, progress_completed,
+                progress_failed, error_message,
+                COALESCE(created_at, CURRENT_TIMESTAMP),
+                COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)
+            FROM song_info
+            """
+        )
+        cursor.execute("DROP TABLE song_info")
+        cursor.execute("ALTER TABLE song_info_recording_migration RENAME TO song_info")
+        for column in (
+            "title",
+            "artist",
+            "normalized_title",
+            "normalized_artist",
+            "work_id",
+            "recording_key",
+            "provider_recording_id",
+            "audio_fingerprint",
+            "status",
+        ):
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS ix_song_info_{column} ON song_info({column})")
+        raw_connection.commit()
+    except Exception:
+        raw_connection.rollback()
+        logger.exception("Could not migrate song_info to recording identity")
+        raise
+    finally:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+        raw_connection.close()
+
+
+def _migrate_lyric_columns() -> None:
+    inspector = inspect(engine)
+    if "lyrics" not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("lyrics")}
+    additions = {
+        "end_time": "FLOAT",
+        "sung_reading": "TEXT",
+        "confidence": "FLOAT",
+        "source": "VARCHAR(50) NOT NULL DEFAULT 'provider'",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.execute(text(f"ALTER TABLE lyrics ADD COLUMN {name} {definition}"))
+
+
+def _migrate_analysis_job_columns() -> None:
+    inspector = inspect(engine)
+    if "analysis_jobs" not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("analysis_jobs")}
+    additions = {
+        "audio_asset_id": "VARCHAR(64)",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "worker_id": "VARCHAR(255)",
+        "heartbeat_at": "DATETIME",
+        "lease_expires_at": "DATETIME",
+        "started_at": "DATETIME",
+        "completed_at": "DATETIME",
+        "result_summary": "TEXT",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.execute(text(f"ALTER TABLE analysis_jobs ADD COLUMN {name} {definition}"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_jobs_audio_asset_id "
+                "ON analysis_jobs(audio_asset_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_jobs_lease_expires_at "
+                "ON analysis_jobs(lease_expires_at)"
+            )
+        )
+
+
+def _backfill_recording_metadata() -> None:
+    inspector = inspect(engine)
+    if "song_info" not in inspector.get_table_names() or "works" not in inspector.get_table_names():
+        return
+
+    from app.services.normalization import (
+        make_recording_key,
+        make_work_id,
+        normalize_song_part,
+    )
+
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT id, title, artist, work_id, recording_key, performer "
+                "FROM song_info WHERE work_id IS NULL OR recording_key IS NULL OR performer IS NULL"
+            )
+        ).mappings()
+        for row in rows:
+            normalized_title = normalize_song_part(row["title"])
+            normalized_artist = normalize_song_part(row["artist"])
+            work_id = row["work_id"] or make_work_id(row["title"], row["artist"])
+            recording_key = row["recording_key"] or make_recording_key(
+                row["title"], row["artist"]
+            )
             connection.execute(
                 text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_song_info_identity "
-                    "ON song_info(normalized_title, normalized_artist)"
-                )
+                    "INSERT OR IGNORE INTO works "
+                    "(id, title, artist, normalized_title, normalized_artist, created_at, updated_at) "
+                    "VALUES (:id, :title, :artist, :normalized_title, :normalized_artist, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": work_id,
+                    "title": row["title"],
+                    "artist": row["artist"],
+                    "normalized_title": normalized_title,
+                    "normalized_artist": normalized_artist,
+                },
             )
-        except Exception:
-            logger.warning("Could not create the legacy song identity index", exc_info=True)
+            connection.execute(
+                text(
+                    "UPDATE song_info SET work_id=:work_id, recording_key=:recording_key, "
+                    "performer=COALESCE(performer, artist), provider=COALESCE(provider, 'youtube_music'), "
+                    "version_type=COALESCE(version_type, 'unknown') WHERE id=:id"
+                ),
+                {
+                    "id": row["id"],
+                    "work_id": work_id,
+                    "recording_key": recording_key,
+                },
+            )
 
 
 def _migrate_legacy_lyric_rows() -> None:
@@ -164,5 +369,8 @@ def init_database() -> None:
     Base.metadata.create_all(bind=engine)
     if settings.database_url.startswith("sqlite"):
         _migrate_song_info_columns()
+        _migrate_lyric_columns()
+        _migrate_analysis_job_columns()
         Base.metadata.create_all(bind=engine)
+        _backfill_recording_metadata()
         _migrate_legacy_lyric_rows()

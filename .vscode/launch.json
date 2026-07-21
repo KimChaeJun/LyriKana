@@ -16,6 +16,13 @@
       "cwd": "${workspaceFolder}"
     },
     {
+      "name": "LyriKana: Analysis Worker Terminal",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\run-analysis-worker.ps1\"",
+      "cwd": "${workspaceFolder}"
+    },
+    {
       "name": "LyriKana: Electron Overlay Terminal",
       "type": "node-terminal",
       "request": "launch",
@@ -28,6 +35,7 @@
       "name": "LyriKana: Full Development",
       "configurations": [
         "LyriKana: Backend Terminal",
+        "LyriKana: Analysis Worker Terminal",
         "LyriKana: Extension Watch Terminal",
         "LyriKana: Electron Overlay Terminal"
       ],

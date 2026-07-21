@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { shouldHoldPlaybackForLyrics } from "./lyricsPreparation";
 
 describe("lyrics preparation playback hold", () => {
-  it("holds a DB miss while the first lyric processing job is incomplete", () => {
+  it("keeps playing on a DB miss while the first lyric job runs", () => {
     expect(
       shouldHoldPlaybackForLyrics({ status: "processing", cacheHit: false })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("releases an existing fully processed DB song immediately", () => {
@@ -18,10 +18,10 @@ describe("lyrics preparation playback hold", () => {
     ).toBe(false);
   });
 
-  it("holds an existing DB row when its lyrics are still incomplete", () => {
+  it("keeps playing when an existing DB row is still incomplete", () => {
     expect(
       shouldHoldPlaybackForLyrics({ status: "fetching", cacheHit: true })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not leave playback permanently locked after a terminal failure", () => {

@@ -11,10 +11,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Lyric, SongInfo
+from app.models import Lyric, SongInfo, Work
 from app.services.lrc import parse_lrc
 from app.services.lrclib import fetch_best_lrclib_lyrics
-from app.services.normalization import make_song_id, normalize_song_part
+from app.services.normalization import (
+    make_recording_id,
+    make_recording_key,
+    make_work_id,
+    normalize_song_part,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -47,18 +52,56 @@ class SongProcessor:
         artist: str | None,
         album: str | None,
         duration: int | None,
+        provider: str = "youtube_music",
+        provider_recording_id: str | None = None,
+        version_type: str = "unknown",
         retry: bool = False,
     ) -> tuple[SongInfo, bool]:
         normalized_title = normalize_song_part(title)
         normalized_artist = normalize_song_part(artist)
-        requested_id = make_song_id(title, artist)
-        song = db.scalar(
-            select(SongInfo).where(
-                SongInfo.normalized_title == normalized_title,
-                SongInfo.normalized_artist == normalized_artist,
-            )
+        work_id = make_work_id(title, artist)
+        recording_key = make_recording_key(
+            title,
+            artist,
+            provider=provider,
+            provider_recording_id=provider_recording_id,
         )
+        requested_id = make_recording_id(
+            title,
+            artist,
+            provider=provider,
+            provider_recording_id=provider_recording_id,
+        )
+        song = db.scalar(select(SongInfo).where(SongInfo.recording_key == recording_key))
+        if song is None and not provider_recording_id:
+            song = db.scalar(
+                select(SongInfo).where(
+                    SongInfo.normalized_title == normalized_title,
+                    SongInfo.normalized_artist == normalized_artist,
+                )
+            )
         created = False
+
+        if song is not None and song.work_id:
+            work_id = song.work_id
+
+        work = db.get(Work, work_id)
+        if work is None:
+            work = Work(
+                id=work_id,
+                title=title.strip(),
+                artist=artist.strip() if artist else None,
+                normalized_title=normalized_title,
+                normalized_artist=normalized_artist,
+            )
+            db.add(work)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                work = db.get(Work, work_id)
+                if work is None:
+                    raise
 
         if song is None:
             # Provider metadata used to overwrite the canonical title/artist.
@@ -72,6 +115,8 @@ class SongProcessor:
                 song.artist = artist.strip() if artist else None
                 song.normalized_title = normalized_title
                 song.normalized_artist = normalized_artist
+                song.work_id = work_id
+                song.recording_key = song.recording_key or recording_key
                 db.commit()
                 logger.warning(
                     "Repaired provider-mutated song identity song_id=%s title=%r artist=%r",
@@ -87,9 +132,15 @@ class SongProcessor:
                 artist=artist.strip() if artist else None,
                 normalized_title=normalized_title,
                 normalized_artist=normalized_artist,
+                work_id=work_id,
+                recording_key=recording_key,
+                provider=provider,
+                provider_recording_id=(provider_recording_id or "").strip() or None,
+                performer=artist.strip() if artist else None,
+                version_type=version_type,
                 album=album,
                 duration=duration,
-                source="youtube_music",
+                source=provider,
                 status="pending",
             )
             db.add(song)
@@ -98,12 +149,14 @@ class SongProcessor:
                 created = True
             except IntegrityError:
                 db.rollback()
-                song = db.scalar(
-                    select(SongInfo).where(
-                        SongInfo.normalized_title == normalized_title,
-                        SongInfo.normalized_artist == normalized_artist,
+                song = db.scalar(select(SongInfo).where(SongInfo.recording_key == recording_key))
+                if song is None and not provider_recording_id:
+                    song = db.scalar(
+                        select(SongInfo).where(
+                            SongInfo.normalized_title == normalized_title,
+                            SongInfo.normalized_artist == normalized_artist,
+                        )
                     )
-                )
                 if song is None:
                     song = db.get(SongInfo, requested_id)
                     if song is not None:
@@ -111,10 +164,27 @@ class SongProcessor:
                         song.artist = artist.strip() if artist else None
                         song.normalized_title = normalized_title
                         song.normalized_artist = normalized_artist
+                        song.work_id = work_id
+                        song.recording_key = song.recording_key or recording_key
                         db.commit()
                 if song is None:
                     raise
-        elif song.status == "failed" and (
+        else:
+            metadata_changed = False
+            if not song.work_id:
+                song.work_id = work_id
+                metadata_changed = True
+            if not song.recording_key:
+                song.recording_key = recording_key
+                metadata_changed = True
+            if provider_recording_id and not song.provider_recording_id:
+                song.provider = provider
+                song.provider_recording_id = provider_recording_id.strip()
+                metadata_changed = True
+            if metadata_changed:
+                db.commit()
+
+        if song.status == "failed" and (
             retry or _is_retryable_provider_failure(song.error_message)
         ):
             song.status = "pending"

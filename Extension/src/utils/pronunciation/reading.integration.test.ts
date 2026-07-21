@@ -3,7 +3,10 @@ import { createRequire } from "node:module";
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { getJapaneseReadingWithTokens } from "./reading";
+import {
+  getJapaneseReadingWithTokens,
+  normalizeLyricTextForAnalysis,
+} from "./reading";
 
 const require = createRequire(import.meta.url);
 const kuromoji = require("kuromoji");
@@ -46,6 +49,17 @@ describe("Japanese reading integration", () => {
 
     expect(result.displayReading).toBe("わたしはいつか");
     expect(result.spokenReading).toBe("わたしわいつか");
+  });
+
+  it("removes decorative quote variants before morphological analysis", () => {
+    expect(normalizeLyricTextForAnalysis('⌈“私は”⌋ 「明日」')).toBe("私は 明日");
+  });
+
+  it("still recognizes は as a particle through decorative brackets", async () => {
+    const result = await getJapaneseReadingWithTokens("⌈私は⌋いつか");
+
+    expect(result.displayReading.replace(/\s+/g, "")).toBe("わたしはいつか");
+    expect(result.spokenReading.replace(/\s+/g, "")).toBe("わたしわいつか");
   });
 
   it("uses tokenizer pronunciation to identify orthographic long vowels", async () => {

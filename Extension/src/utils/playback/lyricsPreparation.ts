@@ -1,9 +1,9 @@
 import type { BackendSongResponse } from "../../api/backend";
 
-const TERMINAL_LYRICS_STATUSES = new Set(["completed", "partial", "failed"]);
-
 export function shouldHoldPlaybackForLyrics(
-  response: Pick<BackendSongResponse, "status" | "cacheHit">
+  _response: Pick<BackendSongResponse, "status" | "cacheHit">
 ): boolean {
-  return !TERMINAL_LYRICS_STATUSES.has(response.status);
+  // Lyrics are generated and cached in the background. Playback must never be
+  // coupled to provider or analysis latency, including the first DB miss.
+  return false;
 }

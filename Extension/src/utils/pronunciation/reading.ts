@@ -116,6 +116,16 @@ function normalizeReadingText(input: string): string {
   return out;
 }
 
+const LYRIC_DECORATION_RE = /["'“”„‟‘’‚‛＂＇「」『』⌈⌉⌊⌋【】《》〈〉]/gu;
+
+export function normalizeLyricTextForAnalysis(input: string): string {
+  return input
+    .normalize("NFKC")
+    .replace(LYRIC_DECORATION_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function applyLyricContextReadingOverrides(
   original: string,
   reading: string
@@ -558,7 +568,9 @@ export async function getLocalJapaneseReadingWithTokens(
     };
   }
 
-  const analysisText = stripExplicitLyricReadings(normalized);
+  const analysisText = normalizeLyricTextForAnalysis(
+    stripExplicitLyricReadings(normalized)
+  );
   const { tokens, reading } = await tokenizeAndBuildLocalReading(analysisText);
   const localCandidate = createReadingCandidate(
     reading,
@@ -735,7 +747,9 @@ export async function getJapaneseReadingWithTokens(
     return cached;
   }
 
-  const analysisText = stripExplicitLyricReadings(normalized);
+  const analysisText = normalizeLyricTextForAnalysis(
+    stripExplicitLyricReadings(normalized)
+  );
   const { tokens, reading: localReading } =
     await tokenizeAndBuildLocalReading(analysisText);
 

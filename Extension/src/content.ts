@@ -199,7 +199,7 @@ const INSTRUMENTAL_MIN_GAP_SECONDS = 9;
 const READING_CACHE_VERSION = 11;
 const READING_ENGINE_TAG = `reading-engine:${READING_CACHE_VERSION}`;
 const BACKEND_RETRY_DELAYS_MS = [750, 1500, 3000, 5000];
-const LYRICS_LOADING_HOLD_TEXT = "가사 호출 중이라 노래 재생을 멈췄습니다";
+const LYRICS_LOADING_HOLD_TEXT = "가사를 준비하는 동안 재생을 계속합니다";
 const DEBUG_FLOW_LOGS = false;
 const PAGE_BRIDGE_SOURCE = "lyrikana-page-playback-bridge";
 const CONTENT_BRIDGE_SOURCE = "lyrikana-content-playback-bridge";
@@ -207,9 +207,6 @@ const PLAYER_PROGRESS_SELECTOR =
   "ytmusic-player-bar #progress-bar[aria-valuenow][aria-valuemax]";
 
 function cleanTitle(title: string): string {
-  if (title.includes(" - ")) {
-    title = title.split(" - ")[0];
-  }
   return title.trim();
 }
 
@@ -1719,6 +1716,8 @@ async function fetchLyrics(
         artist: songInfo.artist,
         duration: songInfo.duration,
         playbackTime: getCurrentPlaybackTime(),
+        videoId: songInfo.videoId,
+        provider: "youtube_music",
       },
       signal,
       (initialResponse) =>
@@ -1860,15 +1859,6 @@ async function handleSongChange(
     resetPlaybackTimeline("song metadata changed");
   }
   const requestId = activeLyricsRequestId;
-  if (!isBackendRetry) {
-    beginLyricsPreparationHold(
-      songKey,
-      song.videoId ?? "",
-      requestId,
-      previousSongKey !== null
-    );
-  }
-
   resetLyrics(LYRICS_LOADING_HOLD_TEXT);
   try {
     await fetchLyrics(song, songKey, requestId, activeLyricsAbortController.signal);

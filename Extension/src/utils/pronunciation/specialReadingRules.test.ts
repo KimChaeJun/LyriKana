@@ -54,6 +54,20 @@ describe("pronunciation regression rules", () => {
     expect(result.en).toBe("watashiwaitsuka");
   });
 
+  it("uses punctuation tokens as anchors around repeated particles", () => {
+    const result = buildPronunciation("これは「ゆめ」は", "これは「夢」は", [
+      { surface: "これ", pos: "名詞", reading: "コレ" },
+      { surface: "は", pos: "助詞", pronunciation: "ワ" },
+      { surface: "「", pos: "記号" },
+      { surface: "夢", pos: "名詞", reading: "ユメ" },
+      { surface: "」", pos: "記号" },
+      { surface: "は", pos: "助詞", pronunciation: "ワ" },
+    ]);
+
+    expect(result.displayReading).toBe("これは「ゆめ」は");
+    expect(result.spokenReading).toBe("これわ「ゆめ」わ");
+  });
+
   it("renders dictionary-confirmed hiragana long vowels as hyphens", () => {
     const result = buildPronunciation("こうこう", "高校", [
       {

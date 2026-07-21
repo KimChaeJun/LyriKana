@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 from sqlalchemy import func, select
 
-from app.models import Lyric, SongInfo
+from app.config import settings
+from app.models import AnalysisJob, AudioAsset, Lyric, SongInfo, Work
+from app.routers import lyrics as lyrics_router
 from app.services import jobs
 from app.services.normalization import make_song_id
 
@@ -129,6 +132,153 @@ def test_provider_metadata_does_not_overwrite_request_identity(api_client, monke
     with test_session() as db:
         song = db.get(SongInfo, song_id)
         assert song.normalized_artist == "mrs. green apple"
+
+
+def test_recording_identity_keeps_live_and_cover_versions_separate(api_client, monkeypatch):
+    client, test_session = api_client
+
+    async def fake_fetch(**_kwargs):
+        return {"trackName": "Song", "artistName": "Artist", "syncedLyrics": SAMPLE_LRC}
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", fake_fetch)
+    live = client.post(
+        "/api/v1/songs/resolve",
+        json={
+            "title": "Song",
+            "artist": "Artist",
+            "videoId": "live-video",
+            "versionType": "live",
+        },
+    )
+    cover = client.post(
+        "/api/v1/songs/resolve",
+        json={
+            "title": "Song",
+            "artist": "Artist",
+            "videoId": "cover-video",
+            "versionType": "cover",
+        },
+    )
+
+    assert live.json()["song"]["id"] != cover.json()["song"]["id"]
+    assert live.json()["song"]["videoId"] == "live-video"
+    assert cover.json()["song"]["videoId"] == "cover-video"
+    assert live.json()["song"]["workId"] == cover.json()["song"]["workId"]
+    with test_session() as db:
+        assert db.scalar(select(func.count()).select_from(Work)) == 1
+        assert db.scalar(select(func.count()).select_from(SongInfo)) == 2
+
+
+def test_video_id_is_stable_when_cover_metadata_changes(api_client, monkeypatch):
+    client, test_session = api_client
+
+    async def fake_fetch(**_kwargs):
+        return {"trackName": "Song", "artistName": "Artist", "syncedLyrics": SAMPLE_LRC}
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", fake_fetch)
+    first = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Song cover", "artist": "Creator", "videoId": "stable-video"},
+    )
+    second = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Song / covered by Creator", "artist": "Creator", "videoId": "stable-video"},
+    )
+
+    assert second.json()["song"]["id"] == first.json()["song"]["id"]
+    assert second.json()["cacheHit"] is True
+    with test_session() as db:
+        assert db.scalar(select(func.count()).select_from(Work)) == 1
+        assert db.scalar(select(func.count()).select_from(SongInfo)) == 1
+
+
+def test_manual_source_lyrics_can_seed_an_analysis_job(api_client, monkeypatch):
+    client, test_session = api_client
+
+    async def fake_fetch(**_kwargs):
+        return {"trackName": "Seed", "artistName": "Artist", "syncedLyrics": SAMPLE_LRC}
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", fake_fetch)
+    response = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Seed", "artist": "Artist", "videoId": "seed-video"},
+    )
+    song_id = response.json()["song"]["id"]
+    wait_for_status(client, song_id, {"processing"})
+
+    replaced = client.put(
+        f"/api/v1/songs/{song_id}/source-lyrics",
+        json={"lyrics": "first phrase\nsecond phrase", "lyricsFormat": "plain"},
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["status"] == "awaiting_alignment"
+    assert [line["original"] for line in replaced.json()["lyrics"]] == [
+        "first phrase",
+        "second phrase",
+    ]
+
+    analysis = client.post(f"/api/v1/songs/{song_id}/analysis", json={})
+    assert analysis.status_code == 202
+    assert analysis.json()["status"] == "awaiting_audio"
+    assert analysis.json()["currentStage"] == "ingest"
+    with test_session() as db:
+        assert db.scalar(select(func.count()).select_from(AnalysisJob)) == 1
+
+
+def test_audio_upload_is_deduplicated_and_queues_asset_analysis(
+    api_client, monkeypatch, tmp_path
+):
+    client, test_session = api_client
+
+    async def fake_fetch(**_kwargs):
+        return {"trackName": "Asset", "artistName": "Artist", "syncedLyrics": SAMPLE_LRC}
+
+    monkeypatch.setattr(jobs, "fetch_best_lrclib_lyrics", fake_fetch)
+    monkeypatch.setattr(
+        lyrics_router,
+        "settings",
+        replace(settings, analysis_data_dir=tmp_path / "analysis"),
+    )
+    response = client.post(
+        "/api/v1/songs/resolve",
+        json={"title": "Asset", "artist": "Artist", "videoId": "asset-video"},
+    )
+    song_id = response.json()["song"]["id"]
+    wait_for_status(client, song_id, {"processing"})
+
+    waiting = client.post(
+        f"/api/v1/songs/{song_id}/analysis",
+        json={"aligner": "timed"},
+    )
+    assert waiting.status_code == 202
+    assert waiting.json()["status"] == "awaiting_audio"
+
+    first = client.put(
+        f"/api/v1/songs/{song_id}/audio?filename=authorized.wav",
+        content=b"authorized local audio",
+        headers={"content-type": "audio/wav"},
+    )
+    second = client.put(
+        f"/api/v1/songs/{song_id}/audio?filename=renamed.wav",
+        content=b"authorized local audio",
+        headers={"content-type": "audio/wav"},
+    )
+
+    assert first.status_code == 201
+    assert first.json()["created"] is True
+    assert first.json()["analysis"]["id"] == waiting.json()["id"]
+    assert first.json()["analysis"]["status"] == "queued"
+    assert second.json()["created"] is False
+    asset_id = first.json()["asset"]["id"]
+    assert second.json()["asset"]["id"] == asset_id
+    queued = client.get(
+        f"/api/v1/songs/{song_id}/analysis/{waiting.json()['id']}"
+    )
+    assert queued.json()["status"] == "queued"
+    assert queued.json()["audioAssetId"] == asset_id
+    assert queued.json()["audioPath"] is None
+    with test_session() as db:
+        assert db.scalar(select(func.count()).select_from(AudioAsset)) == 1
 
 
 def test_resolve_repairs_provider_mutated_identity_without_losing_cache(api_client):

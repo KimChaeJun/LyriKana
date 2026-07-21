@@ -48,6 +48,21 @@
       "presentation": { "panel": "dedicated", "reveal": "always" }
     },
     {
+      "label": "LyriKana: Analysis Worker",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-analysis-worker.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
       "label": "LyriKana: Electron Overlay",
       "type": "process",
       "command": "powershell.exe",
@@ -75,6 +90,7 @@
       "dependsOrder": "parallel",
       "dependsOn": [
         "LyriKana: Backend",
+        "LyriKana: Analysis Worker",
         "LyriKana: Extension Watch",
         "LyriKana: Electron Overlay"
       ],
@@ -103,6 +119,47 @@
         "Bypass",
         "-File",
         "${workspaceFolder}\\scripts\\register-native-host.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Install Analysis Runtime",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\setup-analysis.ps1",
+        "-Runtime",
+        "gpu"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Check Analysis Runtime",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\check-analysis-runtime.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LyriKana: Benchmark Japanese Aligner",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\check-japanese-aligner.ps1"
       ],
       "problemMatcher": []
     },
